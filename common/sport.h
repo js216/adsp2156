@@ -40,8 +40,8 @@ enum sport_half {
 // Parameter block for sport_dsp_serial_init.
 struct sport_dsp_cfg {
    uint32_t word_bits; // 4..32 data bits per word
-   uint32_t clkdiv;   // bit clock = SCLK0 / (clkdiv + 1)
-   uint32_t fsdiv;    // FS period  = (fsdiv + 1) bit clocks
+   uint32_t clkdiv;    // bit clock = SCLK0 / (clkdiv + 1)
+   uint32_t fsdiv;     // FS period  = (fsdiv + 1) bit clocks
    bool is_tx;         // true for transmit half, false for receive
    bool internal_clk;  // true = master (drive bit clock)
    bool internal_fs;   // true = master (drive frame sync)
