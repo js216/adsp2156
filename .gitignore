@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Jakob Kastelic
+*.doj
+*.dxe
+*.ldr
+*.swp
+*.tmp
+*.xml
+
+.claude
+server/inputs
+server/outputs
+server/done
+build/

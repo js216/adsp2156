@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Jakob Kastelic
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  cert-*,
+  cppcoreguidelines-*,
+  hicpp-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -*-braces-around-statements,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -*-macro-to-enum,
+  -performance-no-int-to-ptr,
+  -hicpp-no-assembler
+
+WarningsAsErrors: '*'
+
+CheckOptions:
+  - key:             readability-identifier-naming.VariableCase
+    value:           lower_case
+  - key:             readability-identifier-naming.FunctionCase
+    value:           lower_case
+  - key:             bugprone-easily-swappable-parameters.ModelImplicitConversions
+    value:           'false'
