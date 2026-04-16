@@ -27,3 +27,5 @@ CheckOptions:
     value:           lower_case
   - key:             bugprone-easily-swappable-parameters.ModelImplicitConversions
     value:           'false'
+  - key:             bugprone-easily-swappable-parameters.MinimumLength
+    value:           '4'
