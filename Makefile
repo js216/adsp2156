@@ -2,12 +2,12 @@
 # Makefile --- Top-level build and static-analysis entry point
 # Copyright (c) 2026 Jakob Kastelic
 
-DEMOS = blink uart gpio sport sport_dma
+DEMOS = blink uart gpio sport sport_dma fir
 TC   ?= /opt/analog/cces/3.0.3
 
 SOURCES = $(wildcard common/*.[ch] board/*.[ch] \
             blink/main.c uart/main.c gpio/main.c \
-            sport/main.c sport_dma/main.c)
+            sport/main.c sport_dma/main.c fir/main.c)
 
 all:
 	for d in $(DEMOS); do \
@@ -47,7 +47,12 @@ tidy:
 	python3 scripts/gen_compile_commands.py > /dev/null
 	run-clang-tidy -j$$(nproc) -p build \
 		$(filter-out %/printf.c,$(filter %.c,$(SOURCES))) 2>&1 \
-		| grep -E "warning:|error:" | head -30
+		| grep -E "warning:|error:" | head -30; \
+		run-clang-tidy -j$$(nproc) -p build \
+		$(filter-out %/printf.c,$(filter %.c,$(SOURCES))) 2>&1 \
+		| grep -qE "warning:|error:" \
+		&& { echo "clang-tidy violations found (see above)"; exit 1; } \
+		|| true
 
 inclusions:
 	mkdir -p build

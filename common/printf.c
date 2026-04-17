@@ -42,6 +42,42 @@ static void emit_hex(uint32_t value, int min_width, char pad)
    }
 }
 
+// Number of decimal digits in a uint32_t (0..4294967295).
+#define DEC_DIGITS 10
+// Table of descending powers of ten for digit extraction.
+static const uint32_t dec_pows[DEC_DIGITS] = {
+    1000000000U, 100000000U, 10000000U, 1000000U, 100000U,
+    10000U,      1000U,      100U,      10U,      1U};
+
+static void emit_dec(uint32_t value, int min_width, char pad)
+{
+   // Convert to decimal using repeated subtraction of powers
+   // of 10, avoiding the / and % operators entirely.
+   char buf[DEC_DIGITS];
+   int pos     = 0;
+   int started = 0;
+   for (int i = 0; i < DEC_DIGITS; i++) {
+      uint32_t digit = 0;
+      while (value >= dec_pows[i]) {
+         value -= dec_pows[i];
+         digit++;
+      }
+      if (digit != 0 || started || i == DEC_DIGITS - 1) {
+         buf[pos++] = (char)('0' + digit);
+         started    = 1;
+      }
+   }
+
+   int leading = (min_width > pos) ? (min_width - pos) : 0;
+   while (leading > 0) {
+      putchar(pad);
+      leading--;
+   }
+   for (int i = 0; i < pos; i++) {
+      putchar(buf[i]);
+   }
+}
+
 static void emit_str(const char *s)
 {
    if (s == 0) {
@@ -89,6 +125,16 @@ int printf(const char *fmt, ...)
          case 's': emit_str(va_arg(ap, const char *)); break;
          case 'c': putchar((char)va_arg(ap, int)); break;
          case 'x': emit_hex(va_arg(ap, uint32_t), width, pad); break;
+         case 'u': emit_dec(va_arg(ap, uint32_t), width, pad); break;
+         case 'd': {
+            int32_t sv = va_arg(ap, int32_t);
+            if (sv < 0) {
+               putchar('-');
+               sv = -sv;
+            }
+            emit_dec((uint32_t)sv, width, pad);
+            break;
+         }
          case '%': putchar('%'); break;
          case '\0':
             // Trailing '%' at end of format string; bail out.

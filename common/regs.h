@@ -233,4 +233,44 @@
 #define REG_CGU0_STAT 0x3108D008U // HRM 2-24
 #define REG_CGU0_DIV  0x3108D00CU // HRM 2-22
 
+// ---------- DPM0 (power management) ----------
+
+#define REG_DPM0_PER_DIS0 0x31090070U // HRM 4-7
+
+// ---------- FIR0 accelerator ----------
+
+#define REG_FIR0_CTL1    0x310C3000U // HRM 38-27
+#define REG_FIR0_DMASTAT 0x310C3004U // HRM 38-36
+#define REG_FIR0_MACSTAT 0x310C3008U // HRM 38-42
+#define REG_FIR0_CTL2    0x310C3040U // HRM 38-30
+#define REG_FIR0_INIDX   0x310C3044U // HRM 38-40
+#define REG_FIR0_INMOD   0x310C3048U // HRM 38-41
+#define REG_FIR0_INCNT   0x310C304CU // HRM 38-39
+#define REG_FIR0_INBASE  0x310C3050U // HRM 38-38
+#define REG_FIR0_OUTIDX  0x310C3054U // HRM 38-47
+#define REG_FIR0_OUTMOD  0x310C3058U // HRM 38-48
+#define REG_FIR0_OUTCNT  0x310C305CU // HRM 38-46
+#define REG_FIR0_OUTBASE 0x310C3060U // HRM 38-45
+#define REG_FIR0_COEFIDX 0x310C3064U // HRM 38-25
+#define REG_FIR0_COEFMOD 0x310C3068U // HRM 38-26
+#define REG_FIR0_COEFCNT 0x310C306CU // HRM 38-24
+#define REG_FIR0_CHNPTR  0x310C3070U // HRM 38-23
+
+// FIR_CTL1 bits (Table 38-11, HRM 38-27).
+#define BIT_FIR_CTL1_EN      (1U << 0U) // HRM 38-29 (EN,      bit 0)
+#define BIT_FIR_CTL1_DMAEN   (1U << 8U) // HRM 38-28 (DMAEN,   bit 8)
+#define BIT_FIR_CTL1_BURSTEN (1U << 6U) // HRM 38-29 (BURSTEN, bit 6)
+#define POS_FIR_CTL1_CH      1U         // HRM 38-29 (CH,      bits 1..5)
+#define MASK_FIR_CTL1_CH     0x3EU      // 5-bit channel field
+
+// FIR_CTL2 bits (Table 38-12, HRM 38-30).
+#define POS_FIR_CTL2_TAPLEN  0U // HRM 38-31 (TAPLEN, bits 0..11)
+#define MASK_FIR_CTL2_TAPLEN 0xFFFU
+#define POS_FIR_CTL2_WINDOW  14U       // HRM 38-31 (WINDOW, bits 14..23)
+#define MASK_FIR_CTL2_WINDOW 0x3FF000U // 10 bits already shifted
+
+// FIR_DMASTAT bits (Table 38-15, HRM 38-36).
+#define BIT_FIR_DMASTAT_ACDONE (1U << 6U) // HRM 38-37 (ACDONE, bit 6)
+#define BIT_FIR_DMASTAT_WDONE  (1U << 5U) // HRM 38-37 (WDONE,  bit 5)
+
 #endif // REGS_H

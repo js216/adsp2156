@@ -12,6 +12,7 @@ Examples:
 - **gpio**: GPIO loopback check using hardware jumpers
 - **sport**: SPORT0 internal loopback (LFSR check via DAI SRU)
 - **sport_dma**: 8-SPORT DMA loopback integrity + throughput benchmark
+- **fir**: hardware FIR accelerator low-pass filter demo
 
 ### Author
 
