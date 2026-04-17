@@ -307,4 +307,94 @@
 #define BIT_IIR_DMASTAT_ACDONE (1U << 6U) // HRM 39-25 (ACDONE, bit 6)
 #define BIT_IIR_DMASTAT_WDONE  (1U << 5U) // HRM 39-25 (WDONE,  bit 5)
 
+// ---------- SPI ----------
+//
+// The ADSP-2156x has three SPI modules (SPI0..2). SPI2 supports
+// quad I/O. Each module's registers sit at a 0x1000-byte stride
+// starting from SPI0's base. The driver computes per-instance
+// addresses internally; only the SPI_CTL / SPI_TXCTL / SPI_RXCTL
+// / SPI_STAT bitfield constants live here.
+
+#define REG_SPI0_BASE 0x3102E000U // HRM 15-2
+#define REG_SPI1_BASE 0x3102F000U // HRM 15-2
+#define REG_SPI2_BASE 0x31030000U // HRM 15-2
+
+// Per-module register offsets (Table 15-2, HRM 15-2).
+#define OFF_SPI_CTL      0x04U // HRM 15-36
+#define OFF_SPI_RXCTL    0x08U // HRM 15-64
+#define OFF_SPI_TXCTL    0x0CU // HRM 15-78
+#define OFF_SPI_CLK      0x10U // HRM 15-35
+#define OFF_SPI_DLY      0x14U // HRM 15-42
+#define OFF_SPI_SLVSEL   0x18U // HRM 15-67
+#define OFF_SPI_RWC      0x1CU // HRM 15-62
+#define OFF_SPI_RWCR     0x20U // HRM 15-63
+#define OFF_SPI_TWC      0x24U // HRM 15-76
+#define OFF_SPI_TWCR     0x28U // HRM 15-77
+#define OFF_SPI_STAT     0x40U // HRM 15-70
+#define OFF_SPI_ILAT_CLR 0x48U // HRM 15-45
+#define OFF_SPI_RFIFO    0x50U // HRM 15-61
+#define OFF_SPI_TFIFO    0x58U // HRM 15-75
+
+// SPI_CTL bits (Table 15-14, HRM 15-36).
+#define BIT_SPI_CTL_EN    (1U << 0U)  // HRM 15-41 (EN,     bit 0)
+#define BIT_SPI_CTL_MSTR  (1U << 1U)  // HRM 15-41 (MSTR,   bit 1)
+#define BIT_SPI_CTL_PSSE  (1U << 2U)  // HRM 15-41 (PSSE,   bit 2)
+#define BIT_SPI_CTL_ODM   (1U << 3U)  // HRM 15-41 (ODM,    bit 3)
+#define BIT_SPI_CTL_CPHA  (1U << 4U)  // HRM 15-40 (CPHA,   bit 4)
+#define BIT_SPI_CTL_CPOL  (1U << 5U)  // HRM 15-40 (CPOL,   bit 5)
+#define BIT_SPI_CTL_ASSEL (1U << 6U)  // HRM 15-40 (ASSEL,  bit 6)
+#define BIT_SPI_CTL_SELST (1U << 7U)  // HRM 15-40 (SELST,  bit 7)
+#define BIT_SPI_CTL_EMISO (1U << 8U)  // HRM 15-40 (EMISO,  bit 8)
+#define POS_SPI_CTL_SIZE  9U          // HRM 15-40 (SIZE,   bits 9..10)
+#define BIT_SPI_CTL_LSBF  (1U << 12U) // HRM 15-39 (LSBF,   bit 12)
+#define BIT_SPI_CTL_FMODE (1U << 18U) // HRM 15-38 (FMODE,  bit 18)
+#define POS_SPI_CTL_MIOM  20U         // HRM 15-38 (MIOM,   bits 20..21)
+#define BIT_SPI_CTL_SOSI  (1U << 22U) // HRM 15-37 (SOSI,   bit 22)
+
+// SPI_CTL SIZE field values (HRM 15-40).
+#define SPI_SIZE_8  (0U << POS_SPI_CTL_SIZE)
+#define SPI_SIZE_16 (1U << POS_SPI_CTL_SIZE)
+#define SPI_SIZE_32 (2U << POS_SPI_CTL_SIZE)
+
+// SPI_CTL MIOM field values (HRM 15-38).
+#define SPI_MIOM_DIS  (0U << POS_SPI_CTL_MIOM) // single I/O
+#define SPI_MIOM_DUAL (1U << POS_SPI_CTL_MIOM) // dual I/O
+#define SPI_MIOM_QUAD (2U << POS_SPI_CTL_MIOM) // quad I/O (SPI2)
+
+// SPI_RXCTL bits (Table 15-23, HRM 15-64).
+#define BIT_SPI_RXCTL_REN   (1U << 0U) // HRM 15-66 (REN,   bit 0)
+#define BIT_SPI_RXCTL_RTI   (1U << 2U) // HRM 15-66 (RTI,   bit 2)
+#define BIT_SPI_RXCTL_RWCEN (1U << 3U) // HRM 15-66 (RWCEN, bit 3)
+#define POS_SPI_RXCTL_RDR   4U         // HRM 15-65 (RDR,   bits 4..6)
+
+// SPI_TXCTL bits (Table 15-28, HRM 15-78).
+#define BIT_SPI_TXCTL_TEN   (1U << 0U) // HRM 15-80 (TEN,   bit 0)
+#define BIT_SPI_TXCTL_TTI   (1U << 2U) // HRM 15-79 (TTI,   bit 2)
+#define BIT_SPI_TXCTL_TWCEN (1U << 3U) // HRM 15-79 (TWCEN, bit 3)
+#define POS_SPI_TXCTL_TDR   4U         // HRM 15-79 (TDR,   bits 4..6)
+#define BIT_SPI_TXCTL_TDU   (1U << 8U) // HRM 15-79 (TDU,   bit 8)
+
+// SPI_STAT bits (Table 15-25, HRM 15-70).
+#define BIT_SPI_STAT_SPIF (1U << 0U)  // HRM 15-74 (SPIF, bit 0)
+#define BIT_SPI_STAT_ROR  (1U << 4U)  // HRM 15-73 (ROR,  bit 4)
+#define BIT_SPI_STAT_TUR  (1U << 5U)  // HRM 15-73 (TUR,  bit 5)
+#define BIT_SPI_STAT_TC   (1U << 6U)  // HRM 15-73 (TC,   bit 6)
+#define BIT_SPI_STAT_MF   (1U << 7U)  // HRM 15-73 (MF,   bit 7)
+#define BIT_SPI_STAT_RS   (1U << 8U)  // HRM 15-72 (RS,   bit 8)
+#define BIT_SPI_STAT_TS   (1U << 9U)  // HRM 15-72 (TS,   bit 9)
+#define BIT_SPI_STAT_RF   (1U << 10U) // HRM 15-72 (RF,   bit 10)
+#define BIT_SPI_STAT_TF   (1U << 11U) // HRM 15-72 (TF,   bit 11)
+#define POS_SPI_STAT_RFS  12U         // HRM 15-71 (RFS,  bits 12..14)
+#define POS_SPI_STAT_TFS  16U         // HRM 15-71 (TFS,  bits 16..18)
+#define BIT_SPI_STAT_RFE  (1U << 22U) // HRM 15-71 (RFE,  bit 22)
+#define BIT_SPI_STAT_TFF  (1U << 23U) // HRM 15-71 (TFF,  bit 23)
+
+// SPI_SLVSEL bits (Table 15-24, HRM 15-67).
+#define BIT_SPI_SLVSEL_SSE1  (1U << 1U) // HRM 15-69 (SSE1,  bit 1)
+#define BIT_SPI_SLVSEL_SSEL1 (1U << 9U) // HRM 15-68 (SSEL1, bit 9)
+
+// PORTB registers for SPI0 alternate-function pins.
+#define REG_PORTB_FER 0x31004080U // HRM 12-41
+#define REG_PORTB_MUX 0x310040B0U // HRM 12-61
+
 #endif // REGS_H

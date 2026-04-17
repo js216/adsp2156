@@ -38,3 +38,28 @@ void pinmux_twi2(void)
    MMR(REG_PORTA_MUX) = mux;
    MMR(REG_PORTA_FER) |= (PA_TWI2_SCL_FER_BIT | PA_TWI2_SDA_FER_BIT);
 }
+
+// SPI2 QSPI pins: PA0..PA5, all mux function "b" (value 1).
+// Pin assignments (HRM Table 12-61, PORTA multiplexer):
+//   PA0 = SPI2_MISO  (D1)
+//   PA1 = SPI2_MOSI  (D0)
+//   PA2 = SPI2_D2
+//   PA3 = SPI2_D3
+//   PA4 = SPI2_CLK
+//   PA5 = SPI2_SEL1
+#define PA_SPI2_FER_MASK 0x003FU // PA0..PA5
+#define PA_SPI2_MUX_MASK                                                       \
+   ((3U << 0U) | (3U << 2U) | (3U << 4U) | (3U << 6U) | (3U << 8U) |           \
+    (3U << 10U))
+#define PA_SPI2_MUX_VAL                                                        \
+   ((1U << 0U) | (1U << 2U) | (1U << 4U) | (1U << 6U) | (1U << 8U) |           \
+    (1U << 10U))
+
+void pinmux_spi2(void)
+{
+   uint32_t mux = MMR(REG_PORTA_MUX);
+   mux &= ~PA_SPI2_MUX_MASK;
+   mux |= PA_SPI2_MUX_VAL;
+   MMR(REG_PORTA_MUX) = mux;
+   MMR(REG_PORTA_FER) |= PA_SPI2_FER_MASK;
+}

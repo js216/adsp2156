@@ -2,13 +2,13 @@
 # Makefile --- Top-level build and static-analysis entry point
 # Copyright (c) 2026 Jakob Kastelic
 
-DEMOS = blink uart gpio sport sport_dma fir iir
+DEMOS = blink uart gpio sport sport_dma fir iir qspi_slave
 TC   ?= /opt/analog/cces/3.0.3
 
 SOURCES = $(wildcard common/*.[ch] board/*.[ch] \
             blink/main.c uart/main.c gpio/main.c \
             sport/main.c sport_dma/main.c fir/main.c \
-            iir/main.c)
+            iir/main.c qspi_slave/main.c)
 
 all:
 	for d in $(DEMOS); do \

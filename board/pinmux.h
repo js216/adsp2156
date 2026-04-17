@@ -20,4 +20,9 @@ void pinmux_uart0(void);
 // function "a" (mux value 0). Also sets PORTA_FER.
 void pinmux_twi2(void);
 
+// Configure PA0..PA5 as SPI2 alternate-function "b" (mux
+// value 1): PA0 = MISO, PA1 = MOSI, PA2 = D2, PA3 = D3,
+// PA4 = CLK, PA5 = SEL1. Also sets PORTA_FER.
+void pinmux_spi2(void);
+
 #endif // PINMUX_H
