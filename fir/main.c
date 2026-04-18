@@ -23,9 +23,9 @@
 // filter is the same.
 #define NTAPS 17U
 static const float lpf_coefs[NTAPS] = {
-    -0.001152f, 0.001291f, 0.008489f, 0.022854f, 0.045573f,  0.074711f,
-    0.105547f,  0.131387f, 0.144800f, 0.131387f, 0.105547f,  0.074711f,
-    0.045573f,  0.022854f, 0.008489f, 0.001291f, -0.001152f,
+    -0.001152F, 0.001291F, 0.008489F, 0.022854F, 0.045573F,  0.074711F,
+    0.105547F,  0.131387F, 0.144800F, 0.131387F, 0.105547F,  0.074711F,
+    0.045573F,  0.022854F, 0.008489F, 0.001291F, -0.001152F,
 };
 
 #define WINDOW 256U
@@ -34,30 +34,43 @@ static const float lpf_coefs[NTAPS] = {
 #define FS   48000U
 #define F_LO 200U
 #define F_HI 4000U
-#define PI_F 3.14159265f
 
-static float fabsf_(float x)
+#define TWO_PI_F   6.28318530F
+#define PI_F       3.14159265F
+#define BHASKARA_A 16.0F
+#define BHASKARA_B 5.0F
+#define BHASKARA_C 4.0F
+#define EPSILON    1e-12F
+
+#define STARTUP_MS     1500U
+#define IDLE_MS        1000U
+#define TRANSIENT_MULT 2U
+#define PRINT_COUNT    8U
+#define ATTEN_HI       0.7F
+#define ATTEN_LO       0.1F
+
+static float abs_f(float x)
 {
-   return x < 0.0f ? -x : x;
+   return x < 0.0F ? -x : x;
 }
 
-static float fmodf_(float x, float y)
+static float mod_f(float x, float y)
 {
-   return x - (float)(int)(x / y) * y;
+   return x - ((float)(int)(x / y) * y);
 }
 
 // Bhaskara I sine approximation, ~0.2% max error
-static float sinf_(float x)
+static float sin_approx(float x)
 {
-   x = fmodf_(x, 2.0f * PI_F);
+   x = mod_f(x, TWO_PI_F);
    if (x > PI_F)
-      x -= 2.0f * PI_F;
+      x -= TWO_PI_F;
    if (x < -PI_F)
-      x += 2.0f * PI_F;
-   float num = 16.0f * x * (PI_F - x);
-   float den = 5.0f * PI_F * PI_F - 4.0f * x * (PI_F - x);
-   if (fabsf_(den) < 1e-12f)
-      return 0.0f;
+      x += TWO_PI_F;
+   float num = BHASKARA_A * x * (PI_F - x);
+   float den = (BHASKARA_B * PI_F * PI_F) - (BHASKARA_C * x * (PI_F - x));
+   if (abs_f(den) < EPSILON)
+      return 0.0F;
    return num / den;
 }
 
@@ -72,9 +85,9 @@ static float outbuf[WINDOW];
 
 static float peak_abs(const float *buf, unsigned n)
 {
-   float mx = 0.0f;
+   float mx = 0.0F;
    for (unsigned i = 0; i < n; i++) {
-      float a = fabsf_(buf[i]);
+      float a = abs_f(buf[i]);
       if (a > mx)
          mx = a;
    }
@@ -87,7 +100,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
-   delay_ms(1500);
+   delay_ms(STARTUP_MS);
 
    printf("\r\nfir demo starting\r\n");
 
@@ -97,11 +110,11 @@ int main(void)
 
    // Build input: zero-padded history + two-tone signal
    for (unsigned i = 0; i < NTAPS - 1; i++)
-      inbuf[i] = 0.0f;
+      inbuf[i] = 0.0F;
    for (unsigned i = 0; i < WINDOW; i++) {
       float t              = (float)i / (float)FS;
-      inbuf[NTAPS - 1 + i] = sinf_(2.0f * PI_F * (float)F_LO * t) +
-                             sinf_(2.0f * PI_F * (float)F_HI * t);
+      inbuf[NTAPS - 1 + i] = sin_approx(TWO_PI_F * (float)F_LO * t) +
+                             sin_approx(TWO_PI_F * (float)F_HI * t);
    }
 
    float in_peak = peak_abs(&inbuf[NTAPS - 1], WINDOW);
@@ -118,24 +131,25 @@ int main(void)
        .in_count = NBUF,
    };
    uint32_t st = fir_run(&cfg);
+   printf("stat %x\r\n", st);
 
    // Skip the initial transient, measure steady state
-   unsigned skip = NTAPS * 2;
+   unsigned skip = NTAPS * TRANSIENT_MULT;
    float ss_peak = peak_abs(&outbuf[skip], WINDOW - skip);
    printf("ss_peak %x\r\n", *(unsigned *)&ss_peak);
 
    // Print a few steady-state output samples
-   for (unsigned i = skip; i < WINDOW && i < skip + 8; i++)
+   for (unsigned i = skip; i < WINDOW && i < skip + PRINT_COUNT; i++)
       printf("y[%x] %x\r\n", i, *(unsigned *)&outbuf[i]);
 
    // The output peak should be well below the input peak
    // (roughly half, since only one of two tones passes).
-   if (ss_peak < in_peak * 0.7f && ss_peak > 0.1f)
+   if (ss_peak < (in_peak * ATTEN_HI) && ss_peak > ATTEN_LO)
       printf("PASS lpf_attenuation\r\n");
    else
       printf("FAIL lpf_attenuation\r\n");
 
    printf("fir demo done\r\n");
    for (;;)
-      delay_ms(1000);
+      delay_ms(IDLE_MS);
 }

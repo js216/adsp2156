@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 // Base addresses for SPI0..2 (HRM 15-2). Stride is 0x1000.
-#define SPI_BASE(id) (REG_SPI0_BASE + (uint32_t)(id) * 0x1000U)
+#define SPI_STRIDE   0x1000U
+#define SPI_BASE(id) (REG_SPI0_BASE + ((uint32_t)(id) * SPI_STRIDE))
 
 // Per-instance register accessor.
 #define SPIREG(id, off) MMR(SPI_BASE(id) + (off))
@@ -15,6 +16,9 @@
 // Polling iteration cap to avoid hanging forever on a
 // misconfigured or disconnected bus.
 #define POLL_LIMIT 500000U
+
+// Write-1-to-clear all bits in ILAT_CLR.
+#define ILAT_CLR_ALL 0xFFFFFFFFU
 
 void spi_init(enum spi_id id, const struct spi_cfg *cfg)
 {
@@ -31,7 +35,7 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
 
    // Clear any pending status / interrupt latch bits.
    MMR(base + OFF_SPI_STAT)     = MMR(base + OFF_SPI_STAT);
-   MMR(base + OFF_SPI_ILAT_CLR) = 0xFFFFFFFFU;
+   MMR(base + OFF_SPI_ILAT_CLR) = ILAT_CLR_ALL;
 
    // Build the CTL word.
    uint32_t ctl = BIT_SPI_CTL_EN;
@@ -119,7 +123,7 @@ uint32_t spi_read(enum spi_id id)
       if (!(MMR(base + OFF_SPI_STAT) & BIT_SPI_STAT_RFE))
          return MMR(base + OFF_SPI_RFIFO);
    }
-   return 0xDEAD0001U;
+   return SPI_READ_TIMEOUT;
 }
 
 int spi_xfer(enum spi_id id, const uint32_t *tx, uint32_t *rx, uint32_t n)

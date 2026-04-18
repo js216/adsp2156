@@ -24,42 +24,55 @@
 // where Akx = bx (numerator), Bkx = -ax (negated denominator)
 #define NBIQUADS 1U
 static const float lpf_biquad[NBIQUADS * IIR_WORDS_PER_BIQUAD] = {
-    0.003919f,  // Ak0 = b0
-    0.007838f,  // Ak1 = b1
-    1.815180f,  // Bk1 = -a1
-    0.003919f,  // Ak2 = b2
-    -0.831244f, // Bk2 = -a2
-    0.0f,       // Dk2 (initial state)
-    0.0f,       // Dk1 (initial state)
+    0.003919F,  // Ak0 = b0
+    0.007838F,  // Ak1 = b1
+    1.815180F,  // Bk1 = -a1
+    0.003919F,  // Ak2 = b2
+    -0.831244F, // Bk2 = -a2
+    0.0F,       // Dk2 (initial state)
+    0.0F,       // Dk1 (initial state)
 };
 
 #define WINDOW 256U
 #define FS     48000U
 #define F_LO   200U
 #define F_HI   4000U
-#define PI_F   3.14159265f
 
-static float fabsf_(float x)
+#define TWO_PI_F   6.28318530F
+#define PI_F       3.14159265F
+#define BHASKARA_A 16.0F
+#define BHASKARA_B 5.0F
+#define BHASKARA_C 4.0F
+#define EPSILON    1e-12F
+
+#define STARTUP_MS  1500U
+#define IDLE_MS     1000U
+#define TRANSIENT   128U
+#define PRINT_COUNT 8U
+#define ATTEN_HI    0.7F
+#define ATTEN_LO    0.1F
+
+static float abs_f(float x)
 {
-   return x < 0.0f ? -x : x;
+   return x < 0.0F ? -x : x;
 }
 
-static float fmodf_(float x, float y)
+static float mod_f(float x, float y)
 {
-   return x - (float)(int)(x / y) * y;
+   return x - ((float)(int)(x / y) * y);
 }
 
-static float sinf_(float x)
+static float sin_approx(float x)
 {
-   x = fmodf_(x, 2.0f * PI_F);
+   x = mod_f(x, TWO_PI_F);
    if (x > PI_F)
-      x -= 2.0f * PI_F;
+      x -= TWO_PI_F;
    if (x < -PI_F)
-      x += 2.0f * PI_F;
-   float num = 16.0f * x * (PI_F - x);
-   float den = 5.0f * PI_F * PI_F - 4.0f * x * (PI_F - x);
-   if (fabsf_(den) < 1e-12f)
-      return 0.0f;
+      x += TWO_PI_F;
+   float num = BHASKARA_A * x * (PI_F - x);
+   float den = (BHASKARA_B * PI_F * PI_F) - (BHASKARA_C * x * (PI_F - x));
+   if (abs_f(den) < EPSILON)
+      return 0.0F;
    return num / den;
 }
 
@@ -74,9 +87,9 @@ static float outbuf[WINDOW];
 
 static float peak_abs(const float *buf, unsigned n)
 {
-   float mx = 0.0f;
+   float mx = 0.0F;
    for (unsigned i = 0; i < n; i++) {
-      float a = fabsf_(buf[i]);
+      float a = abs_f(buf[i]);
       if (a > mx)
          mx = a;
    }
@@ -89,7 +102,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
-   delay_ms(1500);
+   delay_ms(STARTUP_MS);
 
    printf("\r\niir demo starting\r\n");
 
@@ -100,8 +113,8 @@ int main(void)
    // Generate two-tone input signal
    for (unsigned i = 0; i < WINDOW; i++) {
       float t  = (float)i / (float)FS;
-      inbuf[i] = sinf_(2.0f * PI_F * (float)F_LO * t) +
-                 sinf_(2.0f * PI_F * (float)F_HI * t);
+      inbuf[i] = sin_approx(TWO_PI_F * (float)F_LO * t) +
+                 sin_approx(TWO_PI_F * (float)F_HI * t);
    }
 
    float in_peak = peak_abs(inbuf, WINDOW);
@@ -122,21 +135,20 @@ int main(void)
    printf("stat %x\r\n", st);
 
    // Skip initial transient, measure steady state
-   unsigned skip = 128;
-   float ss_peak = peak_abs(&outbuf[skip], WINDOW - skip);
+   float ss_peak = peak_abs(&outbuf[TRANSIENT], WINDOW - TRANSIENT);
    printf("ss_peak %x\r\n", *(unsigned *)&ss_peak);
 
    // Print a few steady-state output IEEE bits
-   for (unsigned i = skip; i < WINDOW && i < skip + 8; i++)
+   for (unsigned i = TRANSIENT; i < WINDOW && i < TRANSIENT + PRINT_COUNT; i++)
       printf("y[%x] %x\r\n", i, *(unsigned *)&outbuf[i]);
 
    // Output peak should be well below input peak
-   if (ss_peak < in_peak * 0.7f && ss_peak > 0.1f)
+   if (ss_peak < (in_peak * ATTEN_HI) && ss_peak > ATTEN_LO)
       printf("PASS iir_attenuation\r\n");
    else
       printf("FAIL iir_attenuation\r\n");
 
    printf("iir demo done\r\n");
    for (;;)
-      delay_ms(1000);
+      delay_ms(IDLE_MS);
 }

@@ -62,8 +62,12 @@ void spi_deselect(enum spi_id id);
 // finish.
 void spi_write(enum spi_id id, uint32_t word);
 
+// Sentinel returned by spi_read() on poll timeout.
+#define SPI_READ_TIMEOUT 0xDEAD0001U
+
 // Polled single-word read. Spins until the RX FIFO is
-// non-empty, then pops and returns one word.
+// non-empty, then pops and returns one word. Returns
+// SPI_READ_TIMEOUT if the poll limit is reached.
 uint32_t spi_read(enum spi_id id);
 
 // Polled full-duplex transfer of `n` words. For each word,

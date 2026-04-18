@@ -26,12 +26,17 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define SPI_PORT SPI_ID_2
+#define SPI_PORT     SPI_ID_2
+#define SPI_STRIDE   0x1000U
+#define STARTUP_MS   500U
+#define POLL_WAIT_MS 500U
+#define STAT_EVERY   16U
+#define BYTE_MASK    0xFFU
 
 // Print the SPI_STAT register with decoded error flags.
 static void print_stat(enum spi_id id)
 {
-   uint32_t base = REG_SPI0_BASE + (uint32_t)id * 0x1000U;
+   uint32_t base = REG_SPI0_BASE + ((uint32_t)id * SPI_STRIDE);
    uint32_t s    = MMR(base + OFF_SPI_STAT);
    printf("  stat %08x", s);
    if (s & BIT_SPI_STAT_ROR)
@@ -49,7 +54,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
-   delay_ms(500);
+   delay_ms(STARTUP_MS);
 
    printf("\r\nqspi_slave demo starting\r\n");
 
@@ -79,22 +84,22 @@ int main(void)
    uint32_t count = 0;
    for (;;) {
       uint32_t rx = spi_read(SPI_PORT);
-      if (rx == 0xDEAD0001U) {
+      if (rx == SPI_READ_TIMEOUT) {
          // Poll timeout -- master has not sent anything yet.
          // Re-arm and try again after a short delay.
-         delay_ms(500);
+         delay_ms(POLL_WAIT_MS);
          printf(".");
          continue;
       }
 
-      printf("rx[%x] %02x\r\n", count, rx & 0xFFU);
+      printf("rx[%x] %02x\r\n", count, rx & BYTE_MASK);
       count++;
 
       // Load the echo byte for the next transfer.
       spi_write(SPI_PORT, rx);
 
       // Print status periodically so errors are visible.
-      if ((count & 0xFU) == 0)
+      if ((count & (STAT_EVERY - 1U)) == 0)
          print_stat(SPI_PORT);
    }
 }

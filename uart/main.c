@@ -2,11 +2,9 @@
 // main.c --- UART demo for the EV-21569-SOM
 // Copyright (c) 2026 Jakob Kastelic
 
-// Brings up UART0 at 115200 8N1 via the standard uart_init /
-// printf path and emits a couple of lines per second forever.
-// Also drains the RX FIFO and echoes incoming bytes back, which
-// is enough to verify TX, RX, and the printf format machinery
-// from a host terminal.
+// Brings up UART0 at 115200 8N1 and prints sequentially
+// numbered lines as fast as possible.  Sequential numbering
+// lets the receiver detect any dropped bytes.
 
 #include "board.h"
 #include "clocks.h"
@@ -15,15 +13,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define TICK_MS 800U
-
-static void rx_drain_and_echo(void)
-{
-   int c = -1;
-   while ((c = uart_try_getc()) >= 0) {
-      uart_putc((char)c);
-   }
-}
+#define TICK_MS 1000U
 
 int main(void)
 {
@@ -33,16 +23,10 @@ int main(void)
    timer_init();
    printf("\r\nuart demo starting\r\n");
 
-   uint32_t tick = 0U;
+   uint32_t n = 0U;
    for (;;) {
-      printf("tick %x ping\r\n", tick);
-      tick++;
+      printf("%x\r\n", n);
+      n++;
       delay_ms(TICK_MS);
-      rx_drain_and_echo();
-
-      printf("tick %x pong\r\n", tick);
-      tick++;
-      delay_ms(TICK_MS);
-      rx_drain_and_echo();
    }
 }
