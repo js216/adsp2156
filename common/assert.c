@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
-// assert.c --- Runtime assertion failure handler
+// assert.c --- Project __assert_fail handler (banner + halt)
 // Copyright (c) 2026 Jakob Kastelic
 
-// Runtime assertion failures print a short banner and then
-// spin forever. The banner tries to go out UART0 via the
-// existing printf hook, which will only work if the demo
-// already called uart_init() at startup; otherwise the
-// banner is lost but the infinite loop still catches the
-// failure as a hang. Either way, the core does not keep
-// running past the failure point.
+// __assert_fail backs both libsel's standard `assert(e)` macro
+// and the project's `ASSERT(cond)` extension. On failure it
+// prints a short banner through the UART-backed printf and
+// then spins forever so the core does not keep running past
+// the failure. The banner only lands if uart_init() has
+// already been called; otherwise it is lost and the infinite
+// loop still catches the failure as a hang.
 
-#include "assert.h"
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 
-void assert_fail(const char *file, int line, const char *cond)
+void __assert_fail(const char *expr, const char *file, int line)
 {
-   printf("\r\nASSERTION FAILED: %s:%x: %s\r\n", file, (uint32_t)line, cond);
+   printf("\r\nASSERTION FAILED: %s:%u: %s\r\n", file, (uint32_t)line, expr);
    for (;;) {
       // halt
    }
