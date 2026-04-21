@@ -17,6 +17,20 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// Read the raw IEEE-754 bit pattern of a float through a union.
+// Direct pointer aliasing violates strict aliasing; the union
+// path is the language-defined way to inspect float bits.
+static uint32_t float_bits(float f)
+{
+   union {
+      float f;
+      uint32_t u;
+   } punner;
+
+   punner.f = f;
+   return punner.u;
+}
+
 // Precomputed 17-tap LPF at fc=1000 Hz, fs=48000 Hz, Hamming
 // window. Symmetric; already in the reversed order the FIR
 // accelerator expects (h[N-1] first), which for a symmetric
@@ -118,7 +132,7 @@ int main(void)
    }
 
    float in_peak = peak_abs(&inbuf[NTAPS - 1], WINDOW);
-   printf("in_peak %x\r\n", *(unsigned *)&in_peak);
+   printf("in_peak %x\r\n", float_bits(in_peak));
 
    // Run the hardware FIR
    fir_init();
@@ -136,11 +150,11 @@ int main(void)
    // Skip the initial transient, measure steady state
    unsigned skip = NTAPS * TRANSIENT_MULT;
    float ss_peak = peak_abs(&outbuf[skip], WINDOW - skip);
-   printf("ss_peak %x\r\n", *(unsigned *)&ss_peak);
+   printf("ss_peak %x\r\n", float_bits(ss_peak));
 
    // Print a few steady-state output samples
    for (unsigned i = skip; i < WINDOW && i < skip + PRINT_COUNT; i++)
-      printf("y[%x] %x\r\n", i, *(unsigned *)&outbuf[i]);
+      printf("y[%x] %x\r\n", i, float_bits(outbuf[i]));
 
    // The output peak should be well below the input peak
    // (roughly half, since only one of two tones passes).

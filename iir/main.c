@@ -16,6 +16,20 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// Read the raw IEEE-754 bit pattern of a float through a union.
+// Direct pointer aliasing violates strict aliasing; the union
+// path is the language-defined way to inspect float bits.
+static uint32_t float_bits(float f)
+{
+   union {
+      float f;
+      uint32_t u;
+   } punner;
+
+   punner.f = f;
+   return punner.u;
+}
+
 // 2nd-order Butterworth LPF biquad, fc=1000 Hz, fs=48000 Hz.
 // Computed via bilinear transform, normalized by a0.
 //
@@ -118,7 +132,7 @@ int main(void)
    }
 
    float in_peak = peak_abs(inbuf, WINDOW);
-   printf("in_peak %x\r\n", *(unsigned *)&in_peak);
+   printf("in_peak %x\r\n", float_bits(in_peak));
 
    // Run the hardware IIR
    iir_init();
@@ -136,11 +150,11 @@ int main(void)
 
    // Skip initial transient, measure steady state
    float ss_peak = peak_abs(&outbuf[TRANSIENT], WINDOW - TRANSIENT);
-   printf("ss_peak %x\r\n", *(unsigned *)&ss_peak);
+   printf("ss_peak %x\r\n", float_bits(ss_peak));
 
    // Print a few steady-state output IEEE bits
    for (unsigned i = TRANSIENT; i < WINDOW && i < TRANSIENT + PRINT_COUNT; i++)
-      printf("y[%x] %x\r\n", i, *(unsigned *)&outbuf[i]);
+      printf("y[%x] %x\r\n", i, float_bits(outbuf[i]));
 
    // Output peak should be well below input peak
    if (ss_peak < (in_peak * ATTEN_HI) && ss_peak > ATTEN_LO)

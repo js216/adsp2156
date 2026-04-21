@@ -83,28 +83,6 @@ void spi_rx_enable(enum spi_id id)
    SPIREG(id, OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
 }
 
-void spi_tx_disable(enum spi_id id)
-{
-   SPIREG(id, OFF_SPI_TXCTL) &= ~BIT_SPI_TXCTL_TEN;
-}
-
-void spi_rx_disable(enum spi_id id)
-{
-   SPIREG(id, OFF_SPI_RXCTL) &= ~BIT_SPI_RXCTL_REN;
-}
-
-void spi_select(enum spi_id id)
-{
-   // Drive SSEL1 low (assert).
-   SPIREG(id, OFF_SPI_SLVSEL) &= ~BIT_SPI_SLVSEL_SSEL1;
-}
-
-void spi_deselect(enum spi_id id)
-{
-   // Drive SSEL1 high (deassert).
-   SPIREG(id, OFF_SPI_SLVSEL) |= BIT_SPI_SLVSEL_SSEL1;
-}
-
 void spi_write(enum spi_id id, uint32_t word)
 {
    uint32_t base = SPI_BASE(id);
@@ -124,44 +102,4 @@ uint32_t spi_read(enum spi_id id)
          return MMR(base + OFF_SPI_RFIFO);
    }
    return SPI_READ_TIMEOUT;
-}
-
-int spi_xfer(enum spi_id id, const uint32_t *tx, uint32_t *rx, uint32_t n)
-{
-   uint32_t base = SPI_BASE(id);
-
-   for (uint32_t i = 0; i < n; i++) {
-      // Wait for TX FIFO room.
-      uint32_t tries = POLL_LIMIT;
-      while (MMR(base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF) {
-         if (--tries == 0)
-            return -1;
-      }
-      MMR(base + OFF_SPI_TFIFO) = tx ? tx[i] : 0;
-
-      // Wait for RX data.
-      tries = POLL_LIMIT;
-      while (MMR(base + OFF_SPI_STAT) & BIT_SPI_STAT_RFE) {
-         if (--tries == 0)
-            return -1;
-      }
-      uint32_t got = MMR(base + OFF_SPI_RFIFO);
-      if (rx)
-         rx[i] = got;
-   }
-
-   // Check for errors.
-   uint32_t stat = MMR(base + OFF_SPI_STAT);
-   if (stat & (BIT_SPI_STAT_ROR | BIT_SPI_STAT_TUR | BIT_SPI_STAT_TC))
-      return -1;
-
-   return 0;
-}
-
-void spi_disable(enum spi_id id)
-{
-   uint32_t base             = SPI_BASE(id);
-   MMR(base + OFF_SPI_TXCTL) = 0;
-   MMR(base + OFF_SPI_RXCTL) = 0;
-   MMR(base + OFF_SPI_CTL)   = 0;
 }

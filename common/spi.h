@@ -45,17 +45,10 @@ struct spi_cfg {
 // spi_tx_enable / spi_rx_enable to begin transfers.
 void spi_init(enum spi_id id, const struct spi_cfg *cfg);
 
-// Enable / disable TX and RX independently. In master mode
-// enabling TX or RX with TTI/RTI starts clocking immediately.
+// Enable TX and RX independently. In master mode enabling
+// TX or RX with TTI/RTI starts clocking immediately.
 void spi_tx_enable(enum spi_id id);
 void spi_rx_enable(enum spi_id id);
-void spi_tx_disable(enum spi_id id);
-void spi_rx_disable(enum spi_id id);
-
-// Assert / deassert slave-select 1 (software control). Only
-// meaningful in master mode with ASSEL=0.
-void spi_select(enum spi_id id);
-void spi_deselect(enum spi_id id);
 
 // Polled single-word write. Spins until the TX FIFO has room,
 // then pushes one word. Does not wait for the transfer to
@@ -69,14 +62,5 @@ void spi_write(enum spi_id id, uint32_t word);
 // non-empty, then pops and returns one word. Returns
 // SPI_READ_TIMEOUT if the poll limit is reached.
 uint32_t spi_read(enum spi_id id);
-
-// Polled full-duplex transfer of `n` words. For each word,
-// writes from `tx` (or zero if tx is NULL) and reads into `rx`
-// (or discards if rx is NULL). Returns 0 on success, -1 on
-// error (overrun / underrun / timeout).
-int spi_xfer(enum spi_id id, const uint32_t *tx, uint32_t *rx, uint32_t n);
-
-// Disable the SPI module entirely.
-void spi_disable(enum spi_id id);
 
 #endif // SPI_H

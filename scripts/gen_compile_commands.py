@@ -17,7 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMON = ROOT / "common"
-LIBSEL_INC = ROOT.parent / "selache" / "libsel" / "include"
+LIBSEL = ROOT.parent / "selache" / "libsel"
+LIBSEL_INC = LIBSEL / "include"
+LIBSEL_STDIO = LIBSEL / "src" / "stdio"
 
 FLAGS = (
     "-std=c99 -ffreestanding -Wno-everything "
@@ -49,6 +51,15 @@ def find_sources():
     for d in dirs:
         if d.is_dir():
             sources.extend(d.glob("*.c"))
+    # Also pull libsel's printf.c into the analysis scope so
+    # whole-program checks see it as the caller of putchar();
+    # the other libsel stdio sources (snprintf, sprintf, ...)
+    # are declared in the header but intentionally unused in
+    # this tree and would show up as false-positive
+    # unusedFunction hits if included.
+    libsel_printf = LIBSEL_STDIO / "printf.c"
+    if libsel_printf.is_file():
+        sources.append(libsel_printf)
     return sources
 
 
