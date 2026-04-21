@@ -9,7 +9,7 @@
 // the peripheral bridge, so this driver uses MMR16 throughout.
 
 #include "twi.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdint.h>
 
@@ -39,7 +39,7 @@ int twi_write2(uint32_t addr7, uint32_t reg, uint32_t val)
 {
    // Clear IMSK so no stale interrupt handler fires during the
    // polled wait below.
-   ASSERT(addr7 <= TWI_ADDR7_MASK);
+   assert(addr7 <= TWI_ADDR7_MASK);
    MMR16(REG_TWI2_IMSK) = 0U;
 
    // Flush both FIFOs before each transaction.

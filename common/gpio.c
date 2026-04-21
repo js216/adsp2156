@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Jakob Kastelic
 
 #include "gpio.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -169,7 +169,7 @@ static void mmr_field_set(uint32_t addr, const struct reg_field f, uint32_t val)
 // the first offending line instead of silently mis-routing.
 static const struct pin_info *pin_lookup(const enum gpio_pin pin)
 {
-   ASSERT((uint32_t)pin < GPIO_PIN_COUNT);
+   assert((uint32_t)pin < GPIO_PIN_COUNT);
    return &pin_info[pin];
 }
 
@@ -239,7 +239,7 @@ void gpio_write(const enum gpio_pin pin, const bool high)
 
 uint32_t gpio_read_bank(const enum gpio_bank bnk)
 {
-   ASSERT((uint32_t)bnk < GPIO_BANK_COUNT);
+   assert((uint32_t)bnk < GPIO_BANK_COUNT);
    switch (bnk) {
       case GPIO_BANK_PORTA: return MMR(port_base[0] + OFF_PORT_DATA);
       case GPIO_BANK_PORTB: return MMR(port_base[1] + OFF_PORT_DATA);

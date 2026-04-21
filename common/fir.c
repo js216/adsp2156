@@ -9,7 +9,7 @@
 // engine, and writes the results back to system memory.
 
 #include "fir.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdint.h>
 
@@ -66,9 +66,9 @@ void fir_init(void)
 
 uint32_t fir_run(const struct fir_cfg *cfg)
 {
-   ASSERT(cfg->ntaps >= 1 && cfg->ntaps <= FIR_MAX_TAPS);
-   ASSERT(cfg->window >= 1 && cfg->window <= 1023);
-   ASSERT(cfg->in_count >= cfg->ntaps - 1 + cfg->window);
+   assert(cfg->ntaps >= 1 && cfg->ntaps <= FIR_MAX_TAPS);
+   assert(cfg->window >= 1 && cfg->window <= 1023);
+   assert(cfg->in_count >= cfg->ntaps - 1 + cfg->window);
 
    uint32_t coef_addr = to_word_addr(cfg->coefs);
    uint32_t in_addr   = to_word_addr(cfg->input);

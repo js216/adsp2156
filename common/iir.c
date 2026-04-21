@@ -8,7 +8,7 @@
 // buffers reside in DMA-reachable system memory (L2).
 
 #include "iir.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdint.h>
 
@@ -51,8 +51,8 @@ void iir_init(void)
 
 uint32_t iir_run(const struct iir_cfg *cfg)
 {
-   ASSERT(cfg->nbiquads >= 1 && cfg->nbiquads <= IIR_MAX_BIQUADS);
-   ASSERT(cfg->window >= 1 && cfg->window <= 1024);
+   assert(cfg->nbiquads >= 1 && cfg->nbiquads <= IIR_MAX_BIQUADS);
+   assert(cfg->window >= 1 && cfg->window <= 1024);
 
    uint32_t coef_addr = to_word_addr(cfg->coefs);
    uint32_t in_addr   = to_word_addr(cfg->input);

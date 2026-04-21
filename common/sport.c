@@ -6,7 +6,7 @@
 // Hardware Reference (adsp-2156x_hwr.pdf).
 
 #include "sport.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -226,7 +226,7 @@ static const struct sport_route sport_routes[SPORT_ID_COUNT] = {
 
 void sport_install_internal_loopback(const enum sport_id id)
 {
-   ASSERT((uint32_t)id < SPORT_ID_COUNT);
+   assert((uint32_t)id < SPORT_ID_COUNT);
    const struct sport_route *r = &sport_routes[id];
 
    uint32_t dai_idx = ((uint32_t)id < 4U) ? 0U : 1U;
@@ -305,9 +305,9 @@ static const struct sport_pin_enable pin_enables[SPORT_ID_COUNT] = {
 
 void sport_enable_external_pins(const enum sport_id id)
 {
-   ASSERT((uint32_t)id < SPORT_ID_COUNT);
+   assert((uint32_t)id < SPORT_ID_COUNT);
    const struct sport_pin_enable *pe = &pin_enables[id];
-   ASSERT(pe->pben_reg != 0U);
+   assert(pe->pben_reg != 0U);
 
    uint32_t dai_idx = ((uint32_t)id < 4U) ? 0U : 1U;
    enable_dai_pads(dai_idx);

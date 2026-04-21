@@ -10,7 +10,7 @@
 // DDE keeps cycling through it forever.
 
 #include "dma.h"
-#include "assert.h"
+#include <assert.h>
 #include "regs.h"
 #include <stdint.h>
 
@@ -68,7 +68,7 @@
 static uint32_t dma_base(const enum dma_channel ch)
 {
    uint32_t n = (uint32_t)ch;
-   ASSERT(n <= DMA0_LAST_CH || (n >= DMA10_FIRST_CH && n <= DMA10_LAST_CH));
+   assert(n <= DMA0_LAST_CH || (n >= DMA10_FIRST_CH && n <= DMA10_LAST_CH));
    if (n <= DMA0_LAST_CH) {
       return DMA0_BASE + (n * DMA_CHANNEL_STRIDE);
    }

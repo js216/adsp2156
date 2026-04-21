@@ -10,7 +10,7 @@
 // their reset defaults.
 
 #include "mcp23017.h"
-#include "assert.h"
+#include <assert.h>
 #include "twi.h"
 #include <stdint.h>
 
@@ -23,16 +23,16 @@
 
 int mcp23017_set_direction(const struct mcp23017_target *tgt, uint32_t dir)
 {
-   ASSERT(tgt->addr <= MCP_ADDR7_MASK);
-   ASSERT(tgt->port == MCP23017_PORT_A || tgt->port == MCP23017_PORT_B);
+   assert(tgt->addr <= MCP_ADDR7_MASK);
+   assert(tgt->port == MCP23017_PORT_A || tgt->port == MCP23017_PORT_B);
    uint32_t reg = (tgt->port == MCP23017_PORT_A) ? MCP_IODIRA : MCP_IODIRB;
    return twi_write2(tgt->addr, reg, dir);
 }
 
 int mcp23017_write_gpio(const struct mcp23017_target *tgt, uint32_t val)
 {
-   ASSERT(tgt->addr <= MCP_ADDR7_MASK);
-   ASSERT(tgt->port == MCP23017_PORT_A || tgt->port == MCP23017_PORT_B);
+   assert(tgt->addr <= MCP_ADDR7_MASK);
+   assert(tgt->port == MCP23017_PORT_A || tgt->port == MCP23017_PORT_B);
    uint32_t reg = (tgt->port == MCP23017_PORT_A) ? MCP_GPIOA : MCP_GPIOB;
    return twi_write2(tgt->addr, reg, val);
 }
