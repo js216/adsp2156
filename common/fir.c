@@ -9,8 +9,8 @@
 // engine, and writes the results back to system memory.
 
 #include "fir.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdint.h>
 
 // TCB field indices for legacy mode (HRM 38-14, Table 38-6).

@@ -10,8 +10,8 @@
 // their reset defaults.
 
 #include "mcp23017.h"
-#include <assert.h>
 #include "twi.h"
+#include <assert.h>
 #include <stdint.h>
 
 #define MCP_IODIRA 0x00U

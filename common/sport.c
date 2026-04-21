@@ -6,8 +6,8 @@
 // Hardware Reference (adsp-2156x_hwr.pdf).
 
 #include "sport.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 

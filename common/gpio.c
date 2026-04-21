@@ -3,8 +3,8 @@
 // Copyright (c) 2026 Jakob Kastelic
 
 #include "gpio.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 

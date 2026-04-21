@@ -10,8 +10,8 @@
 // DDE keeps cycling through it forever.
 
 #include "dma.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdint.h>
 
 // Base addresses of the two DDE blocks on ADSP-21569. DDE0

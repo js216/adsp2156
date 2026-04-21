@@ -9,8 +9,8 @@
 // the peripheral bridge, so this driver uses MMR16 throughout.
 
 #include "twi.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdint.h>
 
 #define TWI_ADDR7_MASK 0x7FU

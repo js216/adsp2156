@@ -8,8 +8,8 @@
 // buffers reside in DMA-reachable system memory (L2).
 
 #include "iir.h"
-#include <assert.h>
 #include "regs.h"
+#include <assert.h>
 #include <stdint.h>
 
 // TCB field indices for legacy mode (HRM 39-12, Table 39-5).

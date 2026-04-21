@@ -30,6 +30,7 @@
 #include "gpio.h"
 #include "timer.h"
 #include "uart.h"
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,48 +38,46 @@
 #define SETTLE_MS 2U
 
 struct pin_entry {
-   const char    *header; // e.g. "P13.02"
-   const char    *signal; // e.g. "DAI1_PIN01"
-   enum gpio_pin  pin;
+   const char *header; // e.g. "P13.02"
+   const char *signal; // e.g. "DAI1_PIN01"
+   enum gpio_pin pin;
    enum gpio_bank bnk;
-   uint32_t       stat_bit;
+   uint32_t stat_bit;
 };
 
 static const struct pin_entry pins[] = {
     // P13 -- DAI1 pin buffers (DAI0 slots and DAI1_13..18 not
     // bonded; DAI1_11/12 bonded only on BGA and so skipped).
-    {"P13.02", "DAI1_PIN01", GPIO_DAI1_01, GPIO_BANK_DAI1, 0U},
-    {"P13.04", "DAI1_PIN02", GPIO_DAI1_02, GPIO_BANK_DAI1, 1U},
-    {"P13.06", "DAI1_PIN03", GPIO_DAI1_03, GPIO_BANK_DAI1, 2U},
-    {"P13.08", "DAI1_PIN04", GPIO_DAI1_04, GPIO_BANK_DAI1, 3U},
-    {"P13.10", "DAI1_PIN05", GPIO_DAI1_05, GPIO_BANK_DAI1, 4U},
-    {"P13.12", "DAI1_PIN06", GPIO_DAI1_06, GPIO_BANK_DAI1, 5U},
-    {"P13.14", "DAI1_PIN07", GPIO_DAI1_07, GPIO_BANK_DAI1, 6U},
-    {"P13.16", "DAI1_PIN08", GPIO_DAI1_08, GPIO_BANK_DAI1, 7U},
-    {"P13.18", "DAI1_PIN09", GPIO_DAI1_09, GPIO_BANK_DAI1, 8U},
-    {"P13.20", "DAI1_PIN10", GPIO_DAI1_10, GPIO_BANK_DAI1, 9U},
-    {"P13.38", "DAI1_PIN19", GPIO_DAI1_19, GPIO_BANK_DAI1, 18U},
-    {"P13.40", "DAI1_PIN20", GPIO_DAI1_20, GPIO_BANK_DAI1, 19U},
+    {"P13.02", "DAI1_PIN01", GPIO_DAI1_01, GPIO_BANK_DAI1,  0U },
+    {"P13.04", "DAI1_PIN02", GPIO_DAI1_02, GPIO_BANK_DAI1,  1U },
+    {"P13.06", "DAI1_PIN03", GPIO_DAI1_03, GPIO_BANK_DAI1,  2U },
+    {"P13.08", "DAI1_PIN04", GPIO_DAI1_04, GPIO_BANK_DAI1,  3U },
+    {"P13.10", "DAI1_PIN05", GPIO_DAI1_05, GPIO_BANK_DAI1,  4U },
+    {"P13.12", "DAI1_PIN06", GPIO_DAI1_06, GPIO_BANK_DAI1,  5U },
+    {"P13.14", "DAI1_PIN07", GPIO_DAI1_07, GPIO_BANK_DAI1,  6U },
+    {"P13.16", "DAI1_PIN08", GPIO_DAI1_08, GPIO_BANK_DAI1,  7U },
+    {"P13.18", "DAI1_PIN09", GPIO_DAI1_09, GPIO_BANK_DAI1,  8U },
+    {"P13.20", "DAI1_PIN10", GPIO_DAI1_10, GPIO_BANK_DAI1,  9U },
+    {"P13.38", "DAI1_PIN19", GPIO_DAI1_19, GPIO_BANK_DAI1,  18U},
+    {"P13.40", "DAI1_PIN20", GPIO_DAI1_20, GPIO_BANK_DAI1,  19U},
 
     // P14 -- PORTA/PORTB. PA06/PA07 skipped (UART0 TX/RX).
-    {"P14.06", "PA_08", GPIO_PA08, GPIO_BANK_PORTA, 8U},
-    {"P14.08", "PA_09", GPIO_PA09, GPIO_BANK_PORTA, 9U},
-    {"P14.10", "PB_05", GPIO_PB05, GPIO_BANK_PORTB, 5U},
-    {"P14.12", "PA_10", GPIO_PA10, GPIO_BANK_PORTA, 10U},
-    {"P14.14", "PA_11", GPIO_PA11, GPIO_BANK_PORTA, 11U},
-    {"P14.16", "PA_12", GPIO_PA12, GPIO_BANK_PORTA, 12U},
-    {"P14.18", "PA_13", GPIO_PA13, GPIO_BANK_PORTA, 13U},
-    {"P14.20", "PB_10", GPIO_PB10, GPIO_BANK_PORTB, 10U},
-    {"P14.25", "PA_14", GPIO_PA14, GPIO_BANK_PORTA, 14U},
-    {"P14.27", "PA_15", GPIO_PA15, GPIO_BANK_PORTA, 15U},
+    {"P14.06", "PA_08",      GPIO_PA08,    GPIO_BANK_PORTA, 8U },
+    {"P14.08", "PA_09",      GPIO_PA09,    GPIO_BANK_PORTA, 9U },
+    {"P14.10", "PB_05",      GPIO_PB05,    GPIO_BANK_PORTB, 5U },
+    {"P14.12", "PA_10",      GPIO_PA10,    GPIO_BANK_PORTA, 10U},
+    {"P14.14", "PA_11",      GPIO_PA11,    GPIO_BANK_PORTA, 11U},
+    {"P14.16", "PA_12",      GPIO_PA12,    GPIO_BANK_PORTA, 12U},
+    {"P14.18", "PA_13",      GPIO_PA13,    GPIO_BANK_PORTA, 13U},
+    {"P14.20", "PB_10",      GPIO_PB10,    GPIO_BANK_PORTB, 10U},
+    {"P14.25", "PA_14",      GPIO_PA14,    GPIO_BANK_PORTA, 14U},
+    {"P14.27", "PA_15",      GPIO_PA15,    GPIO_BANK_PORTA, 15U},
 };
 
 #define N_PINS 22U
 
-// Catch pin-table size drift at compile time without relying
-// on _Static_assert (cc21k rejects it): a negative-size array
-// typedef fails to compile when the equation is false.
-typedef char n_pins_size_check[(sizeof(pins) / sizeof(pins[0]) == N_PINS) ? 1 : -1];
+static_assert(sizeof(pins) / sizeof(pins[0]) == N_PINS,
+              "N_PINS out of sync with pin table");
 
 static const char *port_name(enum gpio_bank b)
 {
@@ -86,9 +85,9 @@ static const char *port_name(enum gpio_bank b)
       case GPIO_BANK_PORTA: return "PORTA";
       case GPIO_BANK_PORTB: return "PORTB";
       case GPIO_BANK_PORTC: return "PORTC";
-      case GPIO_BANK_DAI0:  return "DAI0";
-      case GPIO_BANK_DAI1:  return "DAI1";
-      default:              return "?";
+      case GPIO_BANK_DAI0: return "DAI0";
+      case GPIO_BANK_DAI1: return "DAI1";
+      default: return "?";
    }
 }
 
@@ -123,9 +122,12 @@ static void snapshot(uint32_t banks[GPIO_BANK_COUNT])
 
 static uint8_t classify(uint32_t h, uint32_t l)
 {
-   if (h == 1U && l == 0U) return OBS_FOLLOW;
-   if (h == 0U && l == 1U) return OBS_INVERT;
-   if (h == 1U && l == 1U) return OBS_STUCK_HI;
+   if (h == 1U && l == 0U)
+      return OBS_FOLLOW;
+   if (h == 0U && l == 1U)
+      return OBS_INVERT;
+   if (h == 1U && l == 1U)
+      return OBS_STUCK_HI;
    return OBS_ISOLATED;
 }
 
@@ -154,26 +156,27 @@ static void probe_source(uint32_t src)
    }
 }
 
-static void run_test(uint32_t cycle)
+// Drop every pin into the high-impedance state and record
+// which of them still reads high. Pins without an internal
+// pull-down float in that state and their observations in the
+// per-source sweep cannot be trusted; the caller uses this
+// mask to suppress their anomaly reports.
+static void measure_floating(bool floating[N_PINS])
 {
-   printf("=== scan %u ===\r\n", cycle);
-
    uint32_t baseline[GPIO_BANK_COUNT];
    for (uint32_t i = 0; i < N_PINS; i++) {
       gpio_make_input(pins[i].pin);
    }
    delay_ms(SETTLE_MS);
    snapshot(baseline);
-   static bool floating[N_PINS];
    for (uint32_t i = 0; i < N_PINS; i++) {
       floating[i] = sample_bit(baseline, i) != 0U;
    }
+}
 
-   for (uint32_t i = 0; i < N_PINS; i++) {
-      probe_source(i);
-   }
-
-   // Symmetric follows -- clean shorts. Print each pair once.
+// Symmetric follows -- clean shorts. Print each pair once.
+static void report_pairs(void)
+{
    for (uint32_t i = 0; i < N_PINS; i++) {
       for (uint32_t j = i + 1; j < N_PINS; j++) {
          if (obs[i][j] == OBS_FOLLOW && obs[j][i] == OBS_FOLLOW) {
@@ -185,13 +188,17 @@ static void run_test(uint32_t cycle)
          }
       }
    }
+}
 
-   // Asymmetric follows -- one direction tracks but the reverse
-   // does not. Skip pairs involving a floating pin because its
-   // reverse reading is unreliable.
+// Asymmetric follows -- one direction tracks but the reverse
+// does not. Skip pairs involving a floating pin because its
+// reverse reading is unreliable.
+static void report_one_way(const bool floating[N_PINS])
+{
    for (uint32_t i = 0; i < N_PINS; i++) {
       for (uint32_t j = 0; j < N_PINS; j++) {
-         if (i == j || floating[i] || floating[j]) continue;
+         if (i == j || floating[i] || floating[j])
+            continue;
          if (obs[i][j] == OBS_FOLLOW && obs[j][i] != OBS_FOLLOW) {
             printf("WARN one-way follow: ");
             print_pin(i);
@@ -201,12 +208,15 @@ static void run_test(uint32_t cycle)
          }
       }
    }
+}
 
-   // Inverted or stuck-high observations on non-floating
-   // targets.
+// Inverted or stuck-high observations on non-floating targets.
+static void report_weird(const bool floating[N_PINS])
+{
    for (uint32_t i = 0; i < N_PINS; i++) {
       for (uint32_t j = 0; j < N_PINS; j++) {
-         if (i == j || floating[j]) continue;
+         if (i == j || floating[j])
+            continue;
          if (obs[i][j] == OBS_INVERT) {
             printf("WARN inverted: drive ");
             print_pin(i);
@@ -222,6 +232,22 @@ static void run_test(uint32_t cycle)
          }
       }
    }
+}
+
+static void run_test(uint32_t cycle)
+{
+   printf("=== scan %u ===\r\n", cycle);
+
+   static bool floating[N_PINS];
+   measure_floating(floating);
+
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      probe_source(i);
+   }
+
+   report_pairs();
+   report_one_way(floating);
+   report_weird(floating);
 }
 
 int main(void)
