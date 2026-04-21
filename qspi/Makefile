@@ -5,7 +5,9 @@
 OBJ = \
   startup.doj \
   main.doj \
+  assert.doj \
   clocks.doj \
+  dma.doj \
   timer.doj \
   pinmux.doj \
   uart.doj \

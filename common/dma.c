@@ -12,20 +12,25 @@
 #include "dma.h"
 #include "regs.h"
 #include <assert.h>
+#include <stdbool.h>
 #include <stdint.h>
 
-// Base addresses of the two DDE blocks on ADSP-21569. DDE0
+// Base addresses of the DDE blocks on ADSP-21569. DDE0
 // (channels 0..7) lives at DMA0_BASE; DDE1 (channels 10..17)
-// at DMA10_BASE. Channels 8 and 9 (MDMA0) live in a separate
-// block further up and are not handled by this driver.
+// at DMA10_BASE. Channels 8/9 are MDMA0 (unsupported here).
+// Channels 22..27 are SPI0/1/2 TX/RX peripheral-DMA lines
+// in a separate block at DMA22_BASE.
 #define DMA0_BASE          0x31022000U // HRM 27-66
 #define DMA10_BASE         0x31023000U // HRM 27-66
+#define DMA22_BASE         0x3102D000U // cdef ADSP_2156x_HPC.h
 #define DMA_CHANNEL_STRIDE 0x80U       // HRM 27-3
 
-// Channel-number range bounds for the two DDE blocks.
+// Channel-number range bounds for the DDE blocks.
 #define DMA0_LAST_CH   7U
 #define DMA10_FIRST_CH 10U
 #define DMA10_LAST_CH  17U
+#define DMA22_FIRST_CH 22U
+#define DMA22_LAST_CH  27U
 
 // DDE per-channel register offsets (HRM 27-3, Table 27-1).
 #define OFF_DMA_DSCPTR_NXT 0x00 // HRM 27-40
@@ -50,6 +55,7 @@
 #define POS_DMA_CFG_FLOW  12U
 #define DMA_PSIZE_4B      2U // 4-byte peripheral word
 #define DMA_MSIZE_4B      2U // 4-byte memory word
+#define DMA_FLOW_STOP     0U // one-shot: disable at end of count
 #define DMA_FLOW_AUTO     1U // autobuffer
 
 // L1 system-port alias range. The SHARC+ core sees the 1.5 MB
@@ -68,11 +74,15 @@
 static uint32_t dma_base(const enum dma_channel ch)
 {
    uint32_t n = (uint32_t)ch;
-   assert(n <= DMA0_LAST_CH || (n >= DMA10_FIRST_CH && n <= DMA10_LAST_CH));
+   assert(n <= DMA0_LAST_CH || (n >= DMA10_FIRST_CH && n <= DMA10_LAST_CH) ||
+          (n >= DMA22_FIRST_CH && n <= DMA22_LAST_CH));
    if (n <= DMA0_LAST_CH) {
       return DMA0_BASE + (n * DMA_CHANNEL_STRIDE);
    }
-   return DMA10_BASE + ((n - DMA10_FIRST_CH) * DMA_CHANNEL_STRIDE);
+   if (n <= DMA10_LAST_CH) {
+      return DMA10_BASE + ((n - DMA10_FIRST_CH) * DMA_CHANNEL_STRIDE);
+   }
+   return DMA22_BASE + ((n - DMA22_FIRST_CH) * DMA_CHANNEL_STRIDE);
 }
 
 // Translate a core-side L1 address to the system-fabric alias.
@@ -126,4 +136,32 @@ void dma_disable(const enum dma_channel ch)
 uint32_t dma_addr_cur(const enum dma_channel ch)
 {
    return MMR(dma_base(ch) + OFF_DMA_ADDR_CUR);
+}
+
+void dma_oneshot_config(const enum dma_channel ch, const struct dma_buf buf,
+                        const enum dma_dir dir)
+{
+   uint32_t base = dma_base(ch);
+
+   MMR(base + OFF_DMA_CFG) = 0U;
+
+   MMR(base + OFF_DMA_ADDRSTART)  = to_dma_addr(buf.base);
+   MMR(base + OFF_DMA_XCNT)       = buf.word_count;
+   MMR(base + OFF_DMA_XMOD)       = 4U;
+   MMR(base + OFF_DMA_YCNT)       = 0U;
+   MMR(base + OFF_DMA_YMOD)       = 0U;
+   MMR(base + OFF_DMA_DSCPTR_NXT) = 0U;
+
+   uint32_t cfg = (DMA_FLOW_STOP << POS_DMA_CFG_FLOW) |
+                  (DMA_MSIZE_4B << POS_DMA_CFG_MSIZE) |
+                  (DMA_PSIZE_4B << POS_DMA_CFG_PSIZE);
+   if (dir == DMA_DIR_RX_TO_MEM) {
+      cfg |= BIT_DMA_CFG_WNR;
+   }
+   MMR(base + OFF_DMA_CFG) = cfg;
+}
+
+bool dma_done(const enum dma_channel ch)
+{
+   return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR) == 0U;
 }

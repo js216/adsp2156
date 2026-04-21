@@ -17,8 +17,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Channel IDs. Matches the hardware DMA0..DMA17 numbering
-// with the peripheral-DMA gap (DMA8/9 are MDMA, not SPORT).
+// Channel IDs. Matches the hardware DMA0..DMA27 numbering
+// with the peripheral-DMA gaps (DMA8/9 are MDMA, DMA18..21
+// are reserved for other peripherals not handled here).
 enum dma_channel {
    DMA_CH_SPORT0_A = 0,
    DMA_CH_SPORT0_B = 1,
@@ -36,6 +37,12 @@ enum dma_channel {
    DMA_CH_SPORT6_B = 15,
    DMA_CH_SPORT7_A = 16,
    DMA_CH_SPORT7_B = 17,
+   DMA_CH_SPI0_TX  = 22,
+   DMA_CH_SPI0_RX  = 23,
+   DMA_CH_SPI1_TX  = 24,
+   DMA_CH_SPI1_RX  = 25,
+   DMA_CH_SPI2_TX  = 26,
+   DMA_CH_SPI2_RX  = 27,
 };
 
 // Direction of the channel relative to memory. TX_FROM_MEM
@@ -64,11 +71,27 @@ struct dma_buf {
 // the enable bit with dma_enable once the peripheral is also
 // configured and ready to request data.
 //
-// ch  : which DMA channel (DMA_CH_SPORTn_A or _B).
+// ch  : which DMA channel.
 // buf : circular memory region (see struct dma_buf).
 // dir : which way words flow (TX_FROM_MEM or RX_TO_MEM).
 void dma_autobuffer_config(const enum dma_channel ch, const struct dma_buf buf,
                            const enum dma_dir dir);
+
+// Configure a channel for a single-shot 32-bit transfer of
+// buf.word_count words (FLOW = STOP). The channel disables
+// itself after the last transfer; poll dma_done() to wait.
+//
+// ch  : which DMA channel.
+// buf : flat memory region (not circular).
+// dir : TX_FROM_MEM or RX_TO_MEM.
+void dma_oneshot_config(const enum dma_channel ch, const struct dma_buf buf,
+                        const enum dma_dir dir);
+
+// Return true once XCNT_CUR has reached zero -- i.e. the
+// one-shot transfer has drained. Meaningful only after a
+// dma_oneshot_config + dma_enable pair.
+//   ch: which DMA channel.
+bool dma_done(const enum dma_channel ch);
 
 // Set CFG.EN to start the channel.
 //   ch: which DMA channel.

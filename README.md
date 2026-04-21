@@ -14,7 +14,7 @@ Examples:
 - **sport_dma**: 8-SPORT DMA loopback integrity + throughput benchmark
 - **fir**: hardware FIR accelerator low-pass filter demo
 - **iir**: hardware IIR accelerator biquad low-pass filter demo
-- **qspi_slave**: polled SPI2 slave echo demo for FTDI USB master
+- **qspi**: SPI2 PRBS throughput and integrity harness
 
 ### Author
 

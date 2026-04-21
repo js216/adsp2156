@@ -53,9 +53,14 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
    ctl |= (uint32_t)cfg->miom << POS_SPI_CTL_MIOM;
 
    // In slave mode enable MISO output so the slave can drive
-   // data back to the master.
+   // data back to the master. In master mode enable automatic
+   // slave-select assertion (ASSEL) so the SEL1 pin tracks
+   // the transfer; the driver's SLVSEL programming below
+   // picks SEL1 as the active line.
    if (!cfg->is_master)
       ctl |= BIT_SPI_CTL_EMISO;
+   else
+      ctl |= BIT_SPI_CTL_ASSEL;
 
    MMR(base + OFF_SPI_CTL) = ctl;
 
@@ -83,23 +88,17 @@ void spi_rx_enable(enum spi_id id)
    SPIREG(id, OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
 }
 
-void spi_write(enum spi_id id, uint32_t word)
-{
-   uint32_t base = SPI_BASE(id);
-   for (uint32_t i = 0; i < POLL_LIMIT; i++) {
-      if (!(MMR(base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF)) {
-         MMR(base + OFF_SPI_TFIFO) = word;
-         return;
-      }
-   }
-}
+// RDR = 1: the SPI peripheral asserts a DMA request whenever
+// its RX FIFO is non-empty. Higher RDR threshold values
+// (request-on-quarter / half / full) trade request rate for
+// worst-case FIFO residency; 1 is the safest default.
+#define SPI_RXCTL_RDR_NE (1U << POS_SPI_RXCTL_RDR)
+#define SPI_RXCTL_RDR_M  (7U << POS_SPI_RXCTL_RDR)
 
-uint32_t spi_read(enum spi_id id)
+void spi_rx_dma_enable(enum spi_id id)
 {
-   uint32_t base = SPI_BASE(id);
-   for (uint32_t i = 0; i < POLL_LIMIT; i++) {
-      if (!(MMR(base + OFF_SPI_STAT) & BIT_SPI_STAT_RFE))
-         return MMR(base + OFF_SPI_RFIFO);
-   }
-   return SPI_READ_TIMEOUT;
+   uint32_t base             = SPI_BASE(id);
+   uint32_t v                = MMR(base + OFF_SPI_RXCTL);
+   v                         = (v & ~SPI_RXCTL_RDR_M) | SPI_RXCTL_RDR_NE;
+   MMR(base + OFF_SPI_RXCTL) = v;
 }

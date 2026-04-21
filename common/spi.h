@@ -50,17 +50,11 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg);
 void spi_tx_enable(enum spi_id id);
 void spi_rx_enable(enum spi_id id);
 
-// Polled single-word write. Spins until the TX FIFO has room,
-// then pushes one word. Does not wait for the transfer to
-// finish.
-void spi_write(enum spi_id id, uint32_t word);
-
-// Sentinel returned by spi_read() on poll timeout.
-#define SPI_READ_TIMEOUT 0xDEAD0001U
-
-// Polled single-word read. Spins until the RX FIFO is
-// non-empty, then pops and returns one word. Returns
-// SPI_READ_TIMEOUT if the poll limit is reached.
-uint32_t spi_read(enum spi_id id);
+// Enable the RX DMA request line. The SPI peripheral will
+// request a DMA transfer whenever its RX FIFO is non-empty,
+// allowing the SPI0/1/2_RX DMA channel (22/24/26) to drain
+// the FIFO without core intervention. Must be called before
+// spi_rx_enable if DMA is to be used.
+void spi_rx_dma_enable(enum spi_id id);
 
 #endif // SPI_H

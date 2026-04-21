@@ -2,12 +2,12 @@
 # Makefile --- Top-level build and static-analysis entry point
 # Copyright (c) 2026 Jakob Kastelic
 
-DEMOS = blink uart gpio sport sport_dma fir iir qspi_slave
+DEMOS = blink uart gpio sport sport_dma fir iir qspi
 
 SOURCES = $(wildcard common/*.[ch] \
             blink/main.c uart/main.c gpio/main.c \
             sport/main.c sport_dma/main.c fir/main.c \
-            iir/main.c qspi_slave/main.c)
+            iir/main.c qspi/main.c)
 
 all:
 	for d in $(DEMOS); do \
@@ -55,9 +55,13 @@ tidy:
 		|| true
 
 inclusions:
-	mkdir -p build
-	python3 scripts/inclusions.py $(SOURCES) > build/incl.dot
-	dot -Tpdf build/incl.dot -o build/incl.pdf
+	mkdir -p build/incl
+	rm -f build/incl/*.dot build/incl/*.pdf
+	python3 scripts/inclusions.py -o build/incl $(SOURCES)
+	for f in build/incl/*.dot; do \
+		dot -Tpdf $$f -o $${f%.dot}.pdf; \
+	done
+	pdfunite $$(ls build/incl/*.pdf | sort) build/incl.pdf
 
 done:
 	@echo "\033[1;32mSUCCESS\033[0m"
