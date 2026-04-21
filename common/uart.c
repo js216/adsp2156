@@ -32,12 +32,32 @@ void uart_putc(const char c)
    MMR(REG_UART0_THR) = (uint32_t)(uint8_t)c;
 }
 
+// UART_STAT error bits.  Writing 1 clears the latched flag; on the
+// ADSP-2156x, leaving OE (or any of the other line-error flags)
+// latched blocks subsequent RX -- the UART stops asserting DR until
+// the error is acknowledged by software.  Clearing them on every poll
+// keeps RX alive after a transient overrun instead of silently
+// dropping every byte forever.
+#define BIT_UART_STAT_OE (1U << 1U) // overrun
+#define BIT_UART_STAT_PE (1U << 2U) // parity
+#define BIT_UART_STAT_FE (1U << 3U) // framing
+#define BIT_UART_STAT_BI (1U << 4U) // break interrupt
+#define UART_STAT_RX_ERRS                                                      \
+   (BIT_UART_STAT_OE | BIT_UART_STAT_PE | BIT_UART_STAT_FE | BIT_UART_STAT_BI)
+
 int uart_try_getc(void)
 {
-   if ((MMR(REG_UART0_STAT) & BIT_UART_STAT_DR) == 0U) {
-      return -1;
+   uint32_t stat = MMR(REG_UART0_STAT);
+   if (stat & BIT_UART_STAT_DR) {
+      return (int)(uint8_t)MMR(REG_UART0_RBR);
    }
-   return (int)(uint8_t)MMR(REG_UART0_RBR);
+   // Only touch the STAT register when there is nothing to read;
+   // W1C on an active RX path risks clearing DR as a side effect on
+   // some pipelining and starving the next byte.
+   if (stat & UART_STAT_RX_ERRS) {
+      MMR(REG_UART0_STAT) = stat & UART_STAT_RX_ERRS;
+   }
+   return -1;
 }
 
 // Provide the per-byte hook printf expects.

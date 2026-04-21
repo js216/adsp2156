@@ -134,7 +134,7 @@ static inline uint8_t prbs_next(uint32_t *state)
 static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
 {
    struct spi_cfg cfg = {
-       .clkdiv    = (uint16_t)clkdiv,
+       .clkdiv    = clkdiv,
        .size      = SPI_WORD_32,
        .miom      = miom,
        .is_master = master ? 1U : 0U,
@@ -201,16 +201,18 @@ static const char *skip_ws(const char *s)
    return s;
 }
 
-// Parse one unsigned integer (decimal, or 0x-prefixed hex).
-// Writes the value to *out and returns the first unconsumed
-// character. On no digits, returns the input unchanged and
-// leaves *out unmodified.
-static const char *parse_u32(const char *s, uint32_t *out)
+// Parse one unsigned integer with an explicit default base.
+// If the input begins with "0x" the base is forced to 16; else
+// the default_base argument is used. Writes the value to *out
+// and returns the first unconsumed character. On no digits,
+// returns the input unchanged and leaves *out unmodified.
+static const char *parse_u32_base(const char *s, uint32_t *out,
+                                  unsigned default_base)
 {
    s             = skip_ws(s);
    uint32_t v    = 0;
    bool got      = false;
-   unsigned base = BASE_DEC;
+   unsigned base = default_base;
    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
       base = BASE_HEX;
       s += 2;
@@ -233,6 +235,17 @@ static const char *parse_u32(const char *s, uint32_t *out)
    if (got)
       *out = v;
    return s;
+}
+
+// Convenience wrappers.
+static const char *parse_u32(const char *s, uint32_t *out)
+{
+   return parse_u32_base(s, out, BASE_DEC);
+}
+
+static const char *parse_u32_hex(const char *s, uint32_t *out)
+{
+   return parse_u32_base(s, out, BASE_HEX);
 }
 
 // --------- Op implementations ---------
@@ -551,7 +564,10 @@ static void op_loopback(uint32_t count)
 // error otherwise.
 static bool parse_seed_count(const char *rest, uint32_t *seed, uint32_t *count)
 {
-   const char *p = parse_u32(rest, seed);
+   // Seed is documented as hex ("<seed_hex>"), so default to base 16
+   // to let bare "c0ffee" parse without a 0x prefix. Count stays
+   // decimal by default.
+   const char *p = parse_u32_hex(rest, seed);
    (void)parse_u32(p, count);
    if (*count == 0U || (*count & 3U) != 0U) {
       printf("ERR count must be >0 and a multiple of 4\r\n");

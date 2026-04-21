@@ -31,7 +31,7 @@ enum spi_miom {
 
 // SPI port configuration.
 struct spi_cfg {
-   uint16_t clkdiv;         // baud = SCLK0 / (clkdiv + 1)
+   uint32_t clkdiv;         // baud = SCLK0 / (clkdiv + 1)
    enum spi_word_size size; // 8, 16, or 32-bit words
    enum spi_miom miom;      // single / dual / quad
    unsigned is_master : 1;  // 1 = master, 0 = slave
