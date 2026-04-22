@@ -106,4 +106,15 @@ void pinmux_spi2(int is_master)
    else
       fer |= (1U << 0U); // PA0 (MISO) output only
    MMR(REG_PORTA_FER) = fer;
+
+   // HRM 12-49: PORTA_INEN[n] enables the pad's input buffer.
+   // Without INEN=1 the peripheral input connected to that pin
+   // reads 0 regardless of the external signal, and the SPI
+   // slave receive path never sees SCLK/MOSI/SS edges. FER
+   // only governs the OUTPUT direction driver (HRM 12-41: "the
+   // function enable bits impact output control only"), so it
+   // is orthogonal to INEN -- both must be correct. Master role
+   // still needs INEN on MISO + SEL1 (MODF detect), so enable
+   // INEN for the whole SPI2 pin group unconditionally.
+   MMR(REG_PORTA_INEN_SET) = PA_SPI2_FER_MASK;
 }

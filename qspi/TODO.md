@@ -117,6 +117,29 @@ Once SPY proves the SPI slave captures clean words:
 - If this fails, nothing else will; check pinmux, clocks,
   SPI_CTL, RX FIFO polling before anything else.
 
+**Status 2026-04-21: PASS.** Hardware capture:
+`PRBS mode=x1 seed=0x00c0ffee N=64 OK ticks=9296213 ror=0`
+after `M1\n` then `P c0ffee 64\n` followed by the host
+`write_prbs(0xC0FFEE, 64)`.
+
+Root cause of initial bring-up failure was one missing step
+in `pinmux_spi2`: **PORTA_INEN was never asserted for the
+SPI2 pin group.** HRM 12-49: PORTA_INEN[n]=1 enables the pad's
+input buffer; with INEN=0 the peripheral input connected to
+that pin reads 0 regardless of the external signal. Step 0.5
+happened to set `PORTA_INEN_SET |= PA0..PA5` as a bring-up
+aid inside the SPY scaffold, which is why SPY captured the
+full burst; once SPY was disabled the slave never saw SCLK /
+MOSI / SS edges and RFE stayed latched with SPI_STAT =
+0x00440001 (RFE=1, TFIFO empty, SPIF idle) for the entire
+wait window. FER only controls the output driver (HRM 12-41:
+"the function enable bits impact output control only"), so
+FER and INEN are orthogonal -- both must be programmed for a
+peripheral that sources or sinks data through the pad. Fix:
+`pinmux_spi2` now writes `PORTA_INEN_SET = PA0..PA5` on every
+call, which is correct for master role too (MISO input, MODF
+sense on SEL1).
+
 ## 2. Slave, single-lane, DMA
 
 - Same as above but command `D c0ffee 64\n`.
