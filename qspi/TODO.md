@@ -127,6 +127,25 @@ Once SPY proves the SPI slave captures clean words:
 - If CS does not assert, check BIT_SPI_CTL_ASSEL in
   common/spi.c :: spi_init.
 
+**Status 2026-04-21: PARTIAL.** DSP master role works for
+small bursts. SELFTEST clocks 4 words successfully, and
+`Rm 9\nL N` handles N <= 16 bytes (up to TFIFO depth = 4
+words), printing `TX0 mode=x1 N=.. ticks=.. tur=0`. N > 16
+hangs inside `op_tx_zeros`: the `while (TFF)` wait never
+clears at index 4 because SPI stops transmitting after the
+first TFIFO-depth batch -- SPI_STAT reads `0x00804000`
+(TFF=1 + bit 14 set) and TS stays low, so the peripheral is
+idle while the FIFO is full.  Candidates: master needs a
+per-burst TTI re-trigger, or the ASSEL/SLVSEL programming
+keeps CS asserted and blocks the next burst.  Bring-up
+scaffolding in op_tx_zeros now has a 100 ms spin timeout
+that prints `TX0 stuck i=... stat=...` so the hang doesn't
+take the whole job window.
+
+Steps 6-9 reuse the same refill pattern (op_prbs_tx,
+op_prbs_rx_master, op_prbs_xfer) and will hit the same
+ceiling until the TFIFO-refill path is fixed.
+
 ## 6. Master, WR (PRBS transmit)
 
 - `P c0ffee 64\n`. Host verifies incoming PRBS against the

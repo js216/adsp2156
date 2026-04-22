@@ -195,6 +195,9 @@ static void uart_read_line(char *buf, uint32_t cap)
          buf[n++] = (char)c;
    }
    buf[n] = '\0';
+   // Bring-up aid: echo every parsed line. Remove once the
+   // command path is declared reliable.
+   printf("RX[%u]>%s<\r\n", (unsigned)n, buf);
 }
 
 // --------- Tiny parser helpers ---------
@@ -424,8 +427,17 @@ static void op_tx_zeros(uint32_t count)
    uint32_t words = count / BYTES_PER_WORD;
    uint32_t t0    = timer_ticks();
    for (uint32_t i = 0; i < words; i++) {
-      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF)
-         ;
+#define TX0_SPIN_TIMEOUT_MS 100U
+#define TX0_SCLK_PER_MS     93750U // SCLK0 ticks per millisecond
+      uint32_t spin_start = timer_ticks();
+      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF) {
+         if (timer_ticks() - spin_start >
+             (TX0_SPIN_TIMEOUT_MS * TX0_SCLK_PER_MS)) {
+            printf("TX0 stuck i=%u stat=%08x\r\n", (unsigned)i,
+                   MMR(spi_base + OFF_SPI_STAT));
+            return;
+         }
+      }
       MMR(spi_base + OFF_SPI_TFIFO) = 0U;
    }
    while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
@@ -756,43 +768,6 @@ int main(void)
    // Back to slave for the SPY loop.
    spi_reconfigure(SPI_MIO_SINGLE, false, 0);
    printf("SELFTEST done, back to slave\r\n");
-
-   // Step 0.5 bring-up scaffold: dump any SPI RX word straight to
-   // UART so we can tell whether the FT4222 master is actually
-   // clocking bytes into the slave before trusting the command
-   // protocol. The loop exits as soon as any UART byte arrives,
-   // so the normal command path still works once sanity is
-   // confirmed. Remove this block once Step 0.5 passes.
-   printf("SPY draining SPI RX to UART (any UART byte exits)\r\n");
-   spi_rx_flush();
-#define SPY_HEARTBEAT_MS 500U
-   uint32_t spy_last = timer_ticks();
-   uint32_t spy_beat = SPY_HEARTBEAT_MS * SCLK_TICKS_PER_MSEC;
-   for (;;) {
-      if (uart_try_getc() >= 0)
-         break;
-      uint32_t stat = MMR(spi_base + OFF_SPI_STAT);
-      if (!(stat & BIT_SPI_STAT_RFE)) {
-         uint32_t w = MMR(spi_base + OFF_SPI_RFIFO);
-         printf("SPY w=%08x\r\n", w);
-         spy_last = timer_ticks();
-      }
-      if (stat & BIT_SPI_STAT_ROR) {
-         MMR(spi_base + OFF_SPI_STAT) = BIT_SPI_STAT_ROR;
-         printf("SPY ror\r\n");
-         spy_last = timer_ticks();
-      }
-      uint32_t now = timer_ticks();
-      if (now - spy_last >= spy_beat) {
-         uint32_t ctl  = MMR(spi_base + OFF_SPI_CTL);
-         uint32_t pmux = MMR(REG_PORTA_MUX);
-         uint32_t pfer = MMR(REG_PORTA_FER);
-         printf("SPY idle stat=%08x ctl=%08x pmux=%08x pfer=%08x\r\n", stat,
-                ctl, pmux, pfer);
-         spy_last = now;
-      }
-   }
-   printf("SPY exit, entering command loop\r\n");
 
    static char line[CMD_BUF_SIZE];
    for (;;) {
