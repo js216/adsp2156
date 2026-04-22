@@ -223,6 +223,11 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
    MMR(base + OFF_DMA_CFG)        = cfg;
 }
 
+uint32_t dma_stat_raw(const enum dma_channel ch)
+{
+   return MMR(dma_base(ch) + OFF_DMA_STAT);
+}
+
 bool dma_wrap_check(const enum dma_channel ch)
 {
    uint32_t addr = dma_base(ch) + OFF_DMA_STAT;

@@ -76,8 +76,10 @@
 #pragma section("seg_l2_bss", NO_INIT)
 static uint32_t dma_rx_buf[DMA_BUF_WORDS];
 
-// Ping-pong descriptor pair.  Must be DMA-visible; L2 alias is
-// identity so no special placement needed beyond sitting in .bss.
+// Ping-pong descriptor pair.  Force into L2 so the DDE can fetch
+// via its identity-mapped system alias -- L1 placements would need
+// the L1_SYS_OFFSET translation and only for the L1_INT window.
+#pragma section("seg_l2_bss", NO_INIT)
 static struct dma_dscl dma_desc[2];
 
 // ---------- diag_* : non-variadic output helpers ----------
@@ -561,6 +563,16 @@ static void cmd_info(const char *rest)
    diag_hex32(dma_active_words * BYTES_PER_WORD);
    diag_puts(" B  sum=0x");
    diag_hex32(cksum_xor);
+   // Raw DMA channel state for ping-pong bring-up.  dma_stat's top
+   // half holds IRQERR/ERRC (non-zero = rejected config), the low
+   // bits hold RUN/IRQDONE.  addr_cur/xcnt_cur let me see whether
+   // the channel is transferring at all.
+   diag_puts(" dma_stat=0x");
+   diag_hex32(dma_stat_raw(SPI_RX_DMA));
+   diag_puts(" addr=0x");
+   diag_hex32(dma_addr_cur(SPI_RX_DMA));
+   diag_puts(" xcnt=0x");
+   diag_hex32(dma_xcnt_cur(SPI_RX_DMA));
    diag_puts("\r\n");
    cksum_xor   = 0;
    cksum_count = 0;

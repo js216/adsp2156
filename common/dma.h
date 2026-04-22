@@ -150,6 +150,13 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
                             const void *buf_b, uint32_t half_words,
                             struct dma_dscl desc[2]);
 
+// Read the raw DMA_STAT register for the channel.  Used by shells
+// and bring-up tools to inspect IRQERR/ERRC/RUN without making the
+// MMR address a magic number at the call site.
+//   ch:      which DMA channel.
+//   returns: DMA_STAT value.
+uint32_t dma_stat_raw(const enum dma_channel ch);
+
 // Test + clear the DMA_STAT.IRQDONE latch for the given channel.
 // IRQDONE latches when XCNT_CUR underflows (= one work-unit /
 // ring-wrap completion in FLOW=AUTO).  Returns true if the bit
