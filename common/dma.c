@@ -57,6 +57,20 @@
 #define DMA_MSIZE_4B      2U // 4-byte memory word
 #define DMA_FLOW_STOP     0U // one-shot: disable at end of count
 #define DMA_FLOW_AUTO     1U // autobuffer
+#define DMA_FLOW_DSCL     4U // descriptor-list
+
+// NDSIZE field bits 18:16, NDSIZE=4 => 5 descriptor elements
+// fetched (NXT, ADDRSTART, CFG, XCNT, XMOD).
+#define POS_DMA_CFG_NDSIZE 16U
+#define DMA_NDSIZE_5       4U
+
+// INT field bits 21:20.  Value 1 = assert interrupt (and latch
+// DMA_STAT.IRQDONE) when XCNT_CUR reaches 0 at end of work unit.
+#define POS_DMA_CFG_INT  20U
+#define DMA_INT_ON_XCNT0 1U
+
+// DMA_STAT bits (HRM 27-66, Table 27-25).
+#define BIT_DMA_STAT_IRQDONE (1U << 0U)
 
 // L1 system-port alias range. The SHARC+ core sees the 1.5 MB
 // of L1 SRAM through a low byte-address window at L1_INT_BASE;
@@ -171,7 +185,43 @@ bool dma_done(const enum dma_channel ch)
    return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR) == 0U;
 }
 
-#define BIT_DMA_STAT_IRQDONE (1U << 0U) // HRM 27-66, Table 27-25 bit 0
+void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
+                            const void *buf_b, uint32_t half_words,
+                            struct dma_dscl desc[2])
+{
+   uint32_t base = dma_base(ch);
+
+   // Each descriptor is identical except for the buffer pointer and
+   // its next-pointer, which chain A -> B -> A forever.
+   uint32_t cfg = (DMA_NDSIZE_5 << POS_DMA_CFG_NDSIZE) |
+                  (DMA_FLOW_DSCL << POS_DMA_CFG_FLOW) |
+                  (DMA_INT_ON_XCNT0 << POS_DMA_CFG_INT) |
+                  (DMA_MSIZE_4B << POS_DMA_CFG_MSIZE) |
+                  (DMA_PSIZE_4B << POS_DMA_CFG_PSIZE) | BIT_DMA_CFG_WNR |
+                  BIT_DMA_CFG_EN;
+
+   desc[0].next      = to_dma_addr(&desc[1]);
+   desc[0].addrstart = to_dma_addr(buf_a);
+   desc[0].cfg       = cfg;
+   desc[0].xcnt      = half_words;
+   desc[0].xmod      = 4U;
+
+   desc[1].next      = to_dma_addr(&desc[0]);
+   desc[1].addrstart = to_dma_addr(buf_b);
+   desc[1].cfg       = cfg;
+   desc[1].xcnt      = half_words;
+   desc[1].xmod      = 4U;
+
+   // Disable, then start via the DSCPTR_NXT + CFG.EN path.  Writing
+   // CFG with FLOW=DSCL and NDSIZE=4 causes the DDE to fetch the
+   // five elements of descriptor A before beginning the transfer.
+   MMR(base + OFF_DMA_CFG)        = 0U;
+   MMR(base + OFF_DMA_STAT)       = BIT_DMA_STAT_IRQDONE; // W1C stale latch
+   MMR(base + OFF_DMA_DSCPTR_NXT) = to_dma_addr(&desc[0]);
+   MMR(base + OFF_DMA_YCNT)       = 0U;
+   MMR(base + OFF_DMA_YMOD)       = 0U;
+   MMR(base + OFF_DMA_CFG)        = cfg;
+}
 
 bool dma_wrap_check(const enum dma_channel ch)
 {

@@ -58,16 +58,27 @@
 #define CMD_BUF_SIZE   128U
 #define BASE_DEC       10U
 #define BASE_HEX       16U
+// Ping-pong minimum ring size: two 32-bit words (one per half).
+#define PP_MIN_BYTES (2U * BYTES_PER_WORD)
 
-// DMA receive buffer, in 32-bit words.  FLOW=AUTO ring; the CPU
-// chases XCNT_CUR.  Landed in L2 SRAM via seg_l2_bss -- L1 block1
-// faults the core at reset past ~32 KB of initialised data.  L2 has
-// ~1 MiB total; 512 KiB here leaves headroom for other seg_l2_bss
-// data and stays well clear of any future static allocations.
+// DMA receive buffer, in 32-bit words.  Ping-pong: split into two
+// equal halves.  DMA fills half 0, IRQDONE latches, DMA fills half 1
+// (via descriptor chain), IRQDONE re-latches, back to half 0 -- for
+// ever.  CPU drains each half after its IRQDONE arrives while the
+// DMA writes the other half; the two sides never touch the same
+// half at the same time, so no race on the ring buffer contents.
+//
+// Landed in L2 SRAM via seg_l2_bss -- L1 block1 faults the core at
+// reset past ~32 KB of initialised data.  L2 has ~1 MiB total; 512
+// KiB here leaves headroom for other seg_l2_bss data.
 #define DMA_BUF_WORDS (512U * 1024U / BYTES_PER_WORD)
 
 #pragma section("seg_l2_bss", NO_INIT)
 static uint32_t dma_rx_buf[DMA_BUF_WORDS];
+
+// Ping-pong descriptor pair.  Must be DMA-visible; L2 alias is
+// identity so no special placement needed beyond sitting in .bss.
+static struct dma_dscl dma_desc[2];
 
 // ---------- diag_* : non-variadic output helpers ----------
 // printf() on cc21k mis-handles single-arg variadic slots (observed
@@ -101,7 +112,11 @@ static bool current_master        = false;
 static uint32_t current_clkdiv    = 0;
 // Active DMA ring size in 32-bit words.  Capped by the static
 // dma_rx_buf[] allocation (DMA_BUF_WORDS).  b command adjusts it.
+// dma_half_words = dma_active_words >> 1 is the per-descriptor XCNT
+// (pre-computed so the DMA/drain paths avoid any u32 divide, which
+// the -no-std-lib build can't link against libc's __divrem_u32).
 static uint32_t dma_active_words = DMA_BUF_WORDS;
+static uint32_t dma_half_words   = DMA_BUF_WORDS >> 1U;
 // Running XOR-checksum + word count accumulated since the last
 // `i` command (which prints and resets them).  No auto-reset on
 // buffer fill -- if the ring wraps faster than the host drains,
@@ -109,12 +124,15 @@ static uint32_t dma_active_words = DMA_BUF_WORDS;
 static uint32_t cksum_xor   = 0;
 static uint32_t cksum_count = 0;
 // Always-on DMA ring bookkeeping.  Armed at boot in slave role so
-// data received before `h` is already in the ring; `h` and `i`
-// walk rd_pos forward, sampling XCNT_CUR to absorb the new words
-// the DMA has landed since the previous sample.
-static bool dma_armed       = false;
-static uint32_t dma_rd_pos  = 0;
-static uint32_t dma_prev_xc = 0;
+// data received before `h` is already in the ring.  Ping-pong
+// rhythm: dma_half_ready latches true when IRQDONE is observed
+// (dma_wrap_check); drain_poll_new_words reports how many words
+// in the currently-ready half are still unread; rd_pos advances
+// through that half and, on crossing a half-boundary, clears
+// dma_half_ready so the next IRQDONE arms the next drain wave.
+static bool dma_armed      = false;
+static uint32_t dma_rd_pos = 0;
+static bool dma_half_ready = false;
 // Auto-consume: when true, the shell's idle-wait loop continuously
 // samples the DMA ring and folds new words into the running
 // checksum.  This keeps up with DMA on bursts larger than the ring
@@ -207,38 +225,50 @@ static void drain_arm(void)
    if (dma_armed)
       return;
    spi_rx_flush();
-   dma_autobuffer_config(SPI_RX_DMA,
-                         (struct dma_buf){dma_rx_buf, dma_active_words},
-                         DMA_DIR_RX_TO_MEM);
-   dma_enable(SPI_RX_DMA);
-   // Swallow any stale IRQDONE latched before arming.
-   (void)dma_wrap_check(SPI_RX_DMA);
-   dma_armed   = true;
-   dma_rd_pos  = 0;
-   dma_prev_xc = dma_active_words;
-   cksum_xor   = 0;
-   cksum_count = 0;
+   dma_half_words = dma_active_words >> 1U;
+   dma_pingpong_rx_config(SPI_RX_DMA, dma_rx_buf, dma_rx_buf + dma_half_words,
+                          dma_half_words, dma_desc);
+   dma_armed      = true;
+   dma_rd_pos     = 0;
+   dma_half_ready = false;
+   cksum_xor      = 0;
+   cksum_count    = 0;
 }
 
-// Sample XCNT_CUR and return the count of new words the DMA has
-// written since the last sample.  Updates dma_prev_xc.  Safe to
-// call many times per second; the ring wraps and we track the
-// delta modulo dma_active_words.  Caller must consume / print
-// those words from dma_rx_buf[dma_rd_pos] onward and advance
-// rd_pos by the returned count.
-// Sample XCNT_CUR and return the count of new words the DMA has
-// written since the last sample.  Uses DMA_STAT.IRQDONE (latched
-// on every XCNT_CUR underflow = ring wrap) so multi-wrap intervals
-// are counted correctly.  Call at least once per ring-fill-time.
+// Return the number of DMA-written words currently available for
+// the consumer to read starting at dma_rx_buf[dma_rd_pos].  Works
+// with the two-descriptor ping-pong config: each descriptor fills
+// one half, raises IRQDONE, then hands off to its sibling.  The CPU
+// observes the IRQDONE latch and drains the completed half while
+// the DMA writes the other one.
+//
+// State machine:
+//   !dma_half_ready   -> poll dma_wrap_check; if set, a half just
+//                         completed -> dma_half_ready = true.
+//    dma_half_ready   -> return (half_words - offset_in_half);
+//                         caller advances rd_pos through those
+//                         words.  When rd_pos crosses the half
+//                         boundary, drop back to !ready and the
+//                         next wrap_check re-arms the drain.
 static uint32_t drain_poll_new_words(void)
 {
    if (!dma_armed)
       return 0;
-   uint32_t cur = dma_xcnt_cur(SPI_RX_DMA);
-   uint32_t nw  = (cur <= dma_prev_xc) ? (dma_prev_xc - cur)
-                                       : (dma_prev_xc + dma_active_words - cur);
-   dma_prev_xc  = cur;
-   return nw;
+   uint32_t hw       = dma_half_words;
+   uint32_t half_off = dma_rd_pos;
+   if (half_off >= hw)
+      half_off -= hw;
+   if (half_off == 0U && dma_half_ready) {
+      // Consumer just finished draining a full half.  Wait for the
+      // next IRQDONE before reporting anything from the next half.
+      dma_half_ready = false;
+   }
+   if (!dma_half_ready) {
+      if (!dma_wrap_check(SPI_RX_DMA))
+         return 0;
+      dma_half_ready = true;
+   }
+   return hw - half_off;
 }
 
 // ---------- Parsing helpers ----------
@@ -479,8 +509,10 @@ static void cmd_bufsize(const char *rest)
 {
    uint32_t bytes = 0;
    (void)parse_u32(rest, &bytes);
-   if (bytes == 0U || (bytes & 3U) != 0U) {
-      diag_puts("ERR size must be >0 and a multiple of 4\r\n");
+   // Ping-pong splits the ring into two equal halves, so bytes must
+   // be a multiple of 2*BYTES_PER_WORD (two 32-bit words).
+   if (bytes < PP_MIN_BYTES || (bytes & (PP_MIN_BYTES - 1U)) != 0U) {
+      diag_puts("ERR size must be >=8 and a multiple of 8\r\n");
       return;
    }
    uint32_t w = bytes / BYTES_PER_WORD;

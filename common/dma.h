@@ -118,6 +118,38 @@ uint32_t dma_addr_cur(const enum dma_channel ch);
 //   returns: the word count currently in XCNT_CUR.
 uint32_t dma_xcnt_cur(const enum dma_channel ch);
 
+// Descriptor-list mode element block.  5 elements (NDSIZE=4), in
+// the fixed order the DDE fetches them: NXT, ADDRSTART, CFG, XCNT,
+// XMOD.  YCNT / YMOD are not fetched; the channel keeps whatever
+// prior values they held (they are written to 0 by the register-
+// based config helpers, so 1D transfers remain clean).  32-bit
+// alignment suffices (C guarantees it for uint32_t).
+struct dma_dscl {
+   uint32_t next;      // DMA_DSCPTR_NXT of the *following* descriptor
+   uint32_t addrstart; // DMA_ADDRSTART (pre-translated to system alias)
+   uint32_t cfg;       // DMA_CFG for this work unit
+   uint32_t xcnt;      // DMA_XCNT (word count, MSIZE=4B)
+   uint32_t xmod;      // DMA_XMOD (4)
+};
+
+// Configure a channel for two-descriptor ping-pong RX (peripheral
+// -> memory).  Writes both descriptors in place, chains them into
+// an infinite A -> B -> A loop via DSCPTR_NXT, and starts the
+// channel on descriptor A.  Each descriptor carries INT=1 so the
+// DDE latches DMA_STAT.IRQDONE every time a half-buffer fills;
+// poll dma_wrap_check() to detect half-boundaries without an ISR.
+//
+// The caller owns the two half-buffers and the descriptor array.
+// All three must live in DMA-visible memory (L1 aliased or L2).
+//
+// ch          : which DMA channel (must be a peripheral RX channel).
+// buf_a, buf_b: core-side pointers to the two half-buffers.
+// half_words  : number of 32-bit words in EACH half (XCNT per descriptor).
+// desc        : storage for the two descriptors (desc[0] = A, desc[1] = B).
+void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
+                            const void *buf_b, uint32_t half_words,
+                            struct dma_dscl desc[2]);
+
 // Test + clear the DMA_STAT.IRQDONE latch for the given channel.
 // IRQDONE latches when XCNT_CUR underflows (= one work-unit /
 // ring-wrap completion in FLOW=AUTO).  Returns true if the bit
