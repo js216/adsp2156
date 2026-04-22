@@ -24,6 +24,15 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
 {
    uint32_t base = SPI_BASE(id);
 
+   // SPI2 shares its pin bus with OSPI (SPI3); the SCB5 remap
+   // register picks which block owns the external signals. The
+   // boot ROM on the ADSP-2156x may leave this pointing at OSPI
+   // -- in that case SPI2 registers are reachable but CLK/MOSI/
+   // SEL1 traffic never reaches the PA0..PA5 pins and the RX
+   // FIFO stays empty. Clear it here so SPI2 always wins.
+   if (id == SPI_ID_2)
+      MMR(REG_SCB5_REMAP) = 0U;
+
    // Disable the module while configuring.
    MMR(base + OFF_SPI_CTL) = 0;
 
@@ -49,14 +58,17 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
    if (cfg->lsb_first)
       ctl |= BIT_SPI_CTL_LSBF;
 
-   ctl |= (uint32_t)cfg->size << POS_SPI_CTL_SIZE;
-   ctl |= (uint32_t)cfg->miom << POS_SPI_CTL_MIOM;
+   ctl |= (cfg->size & 3U) << POS_SPI_CTL_SIZE;
+   ctl |= (cfg->miom & 3U) << POS_SPI_CTL_MIOM;
 
-   // In slave mode enable MISO output so the slave can drive
-   // data back to the master. In master mode enable automatic
-   // slave-select assertion (ASSEL) so the SEL1 pin tracks
-   // the transfer; the driver's SLVSEL programming below
-   // picks SEL1 as the active line.
+   // Slave role: enable MISO output + PSSE so the slave honors
+   // the pin slave-select (SPI_SS) input. Master role: enable
+   // ASSEL so the SEL1 pin automatically tracks the transfer;
+   // the driver's SLVSEL programming below picks SEL1 as the
+   // active line.
+   // Diagnostic: also set SOSI, because the original peripheral
+   // reset state had bit 22 high and we never verified which
+   // bits are hardware-required.
    if (!cfg->is_master)
       ctl |= BIT_SPI_CTL_EMISO;
    else

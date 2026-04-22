@@ -52,11 +52,42 @@ Before Step 1, confirm the SPI slave actually latches bytes:
   `delay_us(500000)` -- no uart_tx ops at all.
 - Expect 16 `SPY w=<hex>` lines (one per 32-bit word), ROR=0,
   and the PRBS stream decodes against the reference.
-- If SPY sees nothing, the SPI slave is mis-configured.
-  First register to check is `SPI_CTL`. A slave x1 32-bit
-  init should read back `0x00000501` (EN | EMISO | SIZE=2);
-  anything else (notably MIOM or LSBF bits set) points to a
-  `spi_init` bug.
+
+**Status 2026-04-21: PARTIALLY BLOCKED.** SPI_CTL reads back
+cleanly as `0x00000501` (EN | EMISO | SIZE=2) after the
+struct-field fix. A boot-time SELFTEST that configures the
+module as master and clocks four 32-bit words out of PA4
+lands four full-duplex words in the RX FIFO, proving the
+peripheral, its clock, its pinmux at PA0..PA5 mux=1 ("b"),
+and the SCB5 pin routing are all functional.
+
+What does NOT work: running the module as slave and having
+the FT4222-master host clock bytes in. No bytes ever reach
+the RX FIFO, RFE stays latched, ROR never fires, across
+every combination tried:
+
+- PA0..PA4 alt-function mux=0/1/2/3
+- PA5 alt-function mux=0/1/2/3
+- SCB5_REMAP = 0 and 1
+- CPOL=0 with CPHA=0 and CPHA=1
+- PSSE on and off (ignore-SS-pin vs honor-SS-pin)
+- SOSI on and off (swap MISO/MOSI role in slave)
+
+Because the master-mode self-test exercises the same pin
+group and is fine, and no firmware knob left to turn, the
+remaining candidates are all electrical / board-level:
+
+- FT4222's SCK / MOSI / SS lines routed to different DSP
+  pins than the SPI2 peripheral uses (USB_QSPI expander
+  path may land on OSPI pins only, which SCB5_REMAP would
+  decide between at boot time).
+- FT4222's master outputs floating / disabled after the
+  LDR-boot phase of the unified capture session.
+
+Defer Steps 1-4 (slave-role PRBS) until that electrical
+question is answered. Move straight to Steps 5-10, which
+drive the bus from the DSP as master -- the SELFTEST
+proves that path already works.
 
 ## 1. Slave, single-lane, polled (command baseline)
 

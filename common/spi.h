@@ -29,15 +29,18 @@ enum spi_miom {
    SPI_MIO_QUAD   = 2, // quad I/O (SPI2 only)
 };
 
-// SPI port configuration.
+// SPI port configuration. All fields are 32-bit; smaller field
+// widths (enum, uint16_t, bitfields) trigger a cc21k code-gen
+// bug on SHARC+ where stack writes use a halfword store that
+// the core traps on. See qspi/TODO.md for the original report.
 struct spi_cfg {
-   uint32_t clkdiv;         // baud = SCLK0 / (clkdiv + 1)
-   enum spi_word_size size; // 8, 16, or 32-bit words
-   enum spi_miom miom;      // single / dual / quad
-   unsigned is_master : 1;  // 1 = master, 0 = slave
-   unsigned cpol : 1;       // clock polarity
-   unsigned cpha : 1;       // clock phase
-   unsigned lsb_first : 1;  // 0 = MSB first, 1 = LSB first
+   uint32_t clkdiv;    // baud = SCLK0 / (clkdiv + 1)
+   uint32_t size;      // enum spi_word_size: 8 / 16 / 32-bit
+   uint32_t miom;      // enum spi_miom: single / dual / quad
+   uint32_t is_master; // 1 = master, 0 = slave
+   uint32_t cpol;      // clock polarity
+   uint32_t cpha;      // clock phase
+   uint32_t lsb_first; // 0 = MSB first, 1 = LSB first
 };
 
 // Initialise the SPI module with the given configuration. The

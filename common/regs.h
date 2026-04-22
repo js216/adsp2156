@@ -319,6 +319,14 @@
 #define REG_SPI1_BASE 0x3102F000U // HRM 15-2
 #define REG_SPI2_BASE 0x31030000U // HRM 15-2
 
+// SCB5 REMAP selects whether the shared flash/pin bus is owned
+// by SPI2 (REMAP = 0) or by SPI3/OSPI (REMAP = 1). The boot ROM
+// may leave it pointing at OSPI, which silently diverts SPI2
+// pin traffic; the ADI reference driver clears it unconditionally
+// when bringing up SPI2. ADI ADSP-2156x HPC header gives this
+// the symbol REG_SCB5_REMAP.
+#define REG_SCB5_REMAP 0x30400000U
+
 // Per-module register offsets (Table 15-2, HRM 15-2).
 #define OFF_SPI_CTL      0x04U // HRM 15-36
 #define OFF_SPI_RXCTL    0x08U // HRM 15-64

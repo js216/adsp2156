@@ -133,6 +133,14 @@ static inline uint8_t prbs_next(uint32_t *state)
 
 static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
 {
+   // Board-level SPI convention is CPOL=0 / CPHA=1: the FT4222
+   // master that clocks this port at test time (and at boot)
+   // uses pyft4222's `Cpha.CLK_TRAILING` when the .qspi header
+   // flags byte is 0 -- see test_serv/poller.py :: _cpol_cpha.
+   // CLK_TRAILING is CPHA=1 in standard SPI terms (data latched
+   // on the second clock edge). Match that on the slave or the
+   // shift register samples on the wrong edge and the 32-bit
+   // word boundary never completes, leaving the RX FIFO empty.
    struct spi_cfg cfg = {
        .clkdiv    = clkdiv,
        .size      = SPI_WORD_32,
@@ -142,6 +150,9 @@ static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
        .cpha      = 0,
        .lsb_first = 0,
    };
+   // PA5 alt-function depends on master vs slave role; rerun
+   // the pinmux every time to cover the runtime role switch.
+   pinmux_spi2(master ? 1 : 0);
    spi_init(SPI_PORT, &cfg);
    if (!master)
       spi_rx_dma_enable(SPI_PORT);
@@ -702,11 +713,86 @@ int main(void)
 
    printf("\r\nqspi PRBS demo starting\r\n");
 
-   pinmux_spi2();
    spi_base = REG_SPI0_BASE + ((uint32_t)SPI_PORT * SPI_STRIDE);
    spi_reconfigure(SPI_MIO_SINGLE, false, 0);
 
    printf("READY role=slave mode=%s\r\n", miom_name(current_miom));
+
+   // SELFTEST: prove the SPI2 peripheral itself is alive by
+   // running it as master and clocking 4 words out. In master
+   // mode RX and TX are always full-duplex, so every TFIFO push
+   // generates a corresponding RFIFO entry (MISO floating reads
+   // as 0x00 or 0xFF). If TFIFO drains and RFIFO fills, the
+   // peripheral and its clock are functional; if nothing
+   // happens, SPI2 has no clock or is misrouted.
+#define SELFTEST_CLKDIV     9U
+#define SELFTEST_WORDS      4U
+#define SELFTEST_PATTERN    0xA5A5A500U
+#define SELFTEST_WAIT_MS    100U
+#define SCLK_TICKS_PER_MSEC 93750U
+   printf("SELFTEST: master TX/RX roundtrip\r\n");
+   spi_reconfigure(SPI_MIO_SINGLE, true, SELFTEST_CLKDIV);
+   spi_rx_flush();
+   for (uint32_t i = 0; i < SELFTEST_WORDS; i++) {
+      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF)
+         ;
+      MMR(spi_base + OFF_SPI_TFIFO) = SELFTEST_PATTERN | i;
+   }
+   while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
+      ;
+   for (uint32_t i = 0; i < SELFTEST_WORDS; i++) {
+      uint32_t t0 = timer_ticks();
+      while ((MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_RFE) &&
+             (timer_ticks() - t0) < (SELFTEST_WAIT_MS * SCLK_TICKS_PER_MSEC)) {
+      }
+      uint32_t s = MMR(spi_base + OFF_SPI_STAT);
+      if (s & BIT_SPI_STAT_RFE) {
+         printf("SELFTEST[%u] RFE stuck stat=%08x\r\n", (unsigned)i, s);
+         break;
+      }
+      uint32_t w = MMR(spi_base + OFF_SPI_RFIFO);
+      printf("SELFTEST[%u] rx=%08x\r\n", (unsigned)i, w);
+   }
+   // Back to slave for the SPY loop.
+   spi_reconfigure(SPI_MIO_SINGLE, false, 0);
+   printf("SELFTEST done, back to slave\r\n");
+
+   // Step 0.5 bring-up scaffold: dump any SPI RX word straight to
+   // UART so we can tell whether the FT4222 master is actually
+   // clocking bytes into the slave before trusting the command
+   // protocol. The loop exits as soon as any UART byte arrives,
+   // so the normal command path still works once sanity is
+   // confirmed. Remove this block once Step 0.5 passes.
+   printf("SPY draining SPI RX to UART (any UART byte exits)\r\n");
+   spi_rx_flush();
+#define SPY_HEARTBEAT_MS 500U
+   uint32_t spy_last = timer_ticks();
+   uint32_t spy_beat = SPY_HEARTBEAT_MS * SCLK_TICKS_PER_MSEC;
+   for (;;) {
+      if (uart_try_getc() >= 0)
+         break;
+      uint32_t stat = MMR(spi_base + OFF_SPI_STAT);
+      if (!(stat & BIT_SPI_STAT_RFE)) {
+         uint32_t w = MMR(spi_base + OFF_SPI_RFIFO);
+         printf("SPY w=%08x\r\n", w);
+         spy_last = timer_ticks();
+      }
+      if (stat & BIT_SPI_STAT_ROR) {
+         MMR(spi_base + OFF_SPI_STAT) = BIT_SPI_STAT_ROR;
+         printf("SPY ror\r\n");
+         spy_last = timer_ticks();
+      }
+      uint32_t now = timer_ticks();
+      if (now - spy_last >= spy_beat) {
+         uint32_t ctl  = MMR(spi_base + OFF_SPI_CTL);
+         uint32_t pmux = MMR(REG_PORTA_MUX);
+         uint32_t pfer = MMR(REG_PORTA_FER);
+         printf("SPY idle stat=%08x ctl=%08x pmux=%08x pfer=%08x\r\n", stat,
+                ctl, pmux, pfer);
+         spy_last = now;
+      }
+   }
+   printf("SPY exit, entering command loop\r\n");
 
    static char line[CMD_BUF_SIZE];
    for (;;) {

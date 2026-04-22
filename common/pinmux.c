@@ -39,27 +39,40 @@ void pinmux_twi2(void)
    MMR(REG_PORTA_FER) |= (PA_TWI2_SCL_FER_BIT | PA_TWI2_SDA_FER_BIT);
 }
 
-// SPI2 QSPI pins: PA0..PA5, all mux function "b" (value 1).
-// Pin assignments (HRM Table 12-61, PORTA multiplexer):
-//   PA0 = SPI2_MISO  (D1)
-//   PA1 = SPI2_MOSI  (D0)
-//   PA2 = SPI2_D2
-//   PA3 = SPI2_D3
-//   PA4 = SPI2_CLK
-//   PA5 = SPI2_SEL1
+// SPI2 pins: PA0..PA5, alternate function "b" (mux value 1) on
+// PA0..PA4. In master role PA5 is SPI2_SEL1 (output, also alt
+// "b"); in slave role PA5 is SPI2_SS (input, alternate function
+// "d", mux value 3). Empirically verified by SELFTEST: PA0..PA4
+// at mux=1 with the SPI2 peripheral in master mode drives CLK
+// and returns full-duplex RX on MISO.
 #define PA_SPI2_FER_MASK 0x003FU // PA0..PA5
+// PORTA_MUX packs two bits per pin starting at bit 0 for PA0.
+#define PA0_MUX_POS         0U
+#define PA1_MUX_POS         2U
+#define PA2_MUX_POS         4U
+#define PA3_MUX_POS         6U
+#define PA4_MUX_POS         8U
+#define PA5_MUX_POS         10U
+#define SPI2_ALT_FN         1U // alternate function "b" on PA0..PA4
+#define PA5_SLAVE_SS_ALT_FN 3U // alternate function "d" on PA5 = SPI2_SS input
+#define PA5_MASTER_SEL1_ALT_FN                                                 \
+   1U // alternate function "b" on PA5 = SPI2_SEL1 output
 #define PA_SPI2_MUX_MASK                                                       \
-   ((3U << 0U) | (3U << 2U) | (3U << 4U) | (3U << 6U) | (3U << 8U) |           \
-    (3U << 10U))
-#define PA_SPI2_MUX_VAL                                                        \
-   ((1U << 0U) | (1U << 2U) | (1U << 4U) | (1U << 6U) | (1U << 8U) |           \
-    (1U << 10U))
+   ((3U << PA0_MUX_POS) | (3U << PA1_MUX_POS) | (3U << PA2_MUX_POS) |          \
+    (3U << PA3_MUX_POS) | (3U << PA4_MUX_POS) | (3U << PA5_MUX_POS))
 
-void pinmux_spi2(void)
+void pinmux_spi2(int is_master)
 {
+   uint32_t pa0_4 = (SPI2_ALT_FN << PA0_MUX_POS) |
+                    (SPI2_ALT_FN << PA1_MUX_POS) |
+                    (SPI2_ALT_FN << PA2_MUX_POS) |
+                    (SPI2_ALT_FN << PA3_MUX_POS) | (SPI2_ALT_FN << PA4_MUX_POS);
+   uint32_t pa5_field =
+       (is_master ? PA5_MASTER_SEL1_ALT_FN : PA5_SLAVE_SS_ALT_FN)
+       << PA5_MUX_POS;
    uint32_t mux = MMR(REG_PORTA_MUX);
    mux &= ~PA_SPI2_MUX_MASK;
-   mux |= PA_SPI2_MUX_VAL;
+   mux |= pa0_4 | pa5_field;
    MMR(REG_PORTA_MUX) = mux;
    MMR(REG_PORTA_FER) |= PA_SPI2_FER_MASK;
 }
