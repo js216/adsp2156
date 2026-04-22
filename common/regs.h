@@ -36,8 +36,11 @@
 
 // ---------- PORTA pinmux (Function Enable + Mux) ----------
 
-#define REG_PORTA_FER 0x31004000 // HRM 12-41
-#define REG_PORTA_MUX 0x31004030 // HRM 12-61
+#define REG_PORTA_FER      0x31004000U // HRM 12-41
+#define REG_PORTA_DATA     0x3100400CU // HRM 12-46
+#define REG_PORTA_INEN     0x31004024U // HRM 12-49
+#define REG_PORTA_INEN_SET 0x31004028U // HRM 12-49
+#define REG_PORTA_MUX      0x31004030U // HRM 12-61
 
 // ---------- UART0 ----------
 
@@ -327,6 +330,14 @@
 // the symbol REG_SCB5_REMAP.
 #define REG_SCB5_REMAP 0x30400000U
 
+// OSPI0 (SPI3) shares the SPI2/OSPI pin group on PA0..PA5 with
+// SPI2. The boot ROM may leave OSPI0 enabled so that it contends
+// with SPI2 for the shared pin bus; clear OSPI0_CTL.EN before
+// bringing SPI2 up. See HRM chapter 16 (OSPI) for the register
+// layout. Only bit 0 (EN) matters here.
+#define REG_OSPI0_CTL   0x31027000U
+#define BIT_OSPI_CTL_EN (1U << 0U)
+
 // Per-module register offsets (Table 15-2, HRM 15-2).
 #define OFF_SPI_CTL      0x04U // HRM 15-36
 #define OFF_SPI_RXCTL    0x08U // HRM 15-64
@@ -400,6 +411,15 @@
 // SPI_SLVSEL bits (Table 15-24, HRM 15-67).
 #define BIT_SPI_SLVSEL_SSE1  (1U << 1U) // HRM 15-69 (SSE1,  bit 1)
 #define BIT_SPI_SLVSEL_SSEL1 (1U << 9U) // HRM 15-68 (SSEL1, bit 9)
+
+// Slave-mode SLVSEL value: SSE1..SSE7 all disabled (low byte = 0x00,
+// so the peripheral does not drive any SEL output while acting as a
+// slave) and SSEL1..SSEL7 all high (bits 9..15 = 0xFE00) to mirror
+// CCES adi_spi_2156x.c :: DEFAULT_SPISLVSEL_OUTPUT. The SSEL high
+// bits only matter when SSE is set, but CCES writes them regardless
+// so that a subsequent master reconfigure starts from the expected
+// "all chips deselected" state.
+#define SPI_SLVSEL_SLAVE_IDLE 0x0000FE00U
 
 // PORTB registers for SPI0 alternate-function pins.
 #define REG_PORTB_FER 0x31004080U // HRM 12-41

@@ -9,7 +9,11 @@ import make_qspi as q
 
 buf = bytearray()
 buf += q.header(clk_div=q.CLK_DIV_8, mode=q.MODE_SINGLE, flags=0)
-buf += q.delay_us(100000)
+# Hold off until the DSP has finished boot + SELFTEST (~700 ms on
+# the 21569 with STARTUP_MS=500), then fire exactly one 64-byte
+# write_prbs burst into the DSP slave's SPY window. 64 bytes at
+# SIZE=32 = 16 32-bit words, matching the TODO pass criterion.
+buf += q.delay_us(900000)
 buf += q.write_prbs(0x00C0FFEE, 64)
 buf += q.delay_us(500000)
 

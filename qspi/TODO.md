@@ -17,31 +17,6 @@ Every step runs as one stapled job so UART + scope span reset
 Build each step's `.qspi` with a tiny Python script that pulls
 in `test_serv/examples/make_qspi.py` helpers.
 
-## 0. Prerequisites (must be in place before Step 1)
-
-These are firmware bugs uncovered during bring-up; every later
-step assumes they are fixed.
-
-- `common/spi.h :: struct spi_cfg` must use `uint32_t clkdiv`,
-  not `uint16_t`. cc21k generates a halfword store that the
-  SHARC+ core traps on (FAULT LED latched, C2 ~= 124 in the
-  scope CSV) when writing a `uint16_t` field on the stack in
-  `spi_reconfigure`.
-- `common/uart.c :: uart_try_getc` must W1C the OE/PE/FE/BI
-  error bits of `UART0_STAT`. Once any of them latches -- and
-  OE latches easily when the DSP is mid-printf -- the UART
-  stops asserting DR for subsequent bytes and RX dies
-  silently. Order matters: read RBR first when DR is set,
-  only clear errors when DR was 0, or the W1C clears DR as
-  a side effect.
-- `qspi/main.c :: parse_seed_count` must default the seed to
-  hex (the doc string says `<seed_hex>`). Bare `c0ffee` would
-  otherwise parse as decimal, fail silently, and leave the
-  count stuck at 0.
-- FAULT LED check: before any step, confirm the `.csv` shows
-  `C2 DSP_FAULT duty=0%`. >0% means the core halted and any
-  UART/SPI result is meaningless.
-
 ## 0.5. SPY sanity (SPI RX path, no UART commands)
 
 Before Step 1, confirm the SPI slave actually latches bytes:
@@ -53,41 +28,84 @@ Before Step 1, confirm the SPI slave actually latches bytes:
 - Expect 16 `SPY w=<hex>` lines (one per 32-bit word), ROR=0,
   and the PRBS stream decodes against the reference.
 
-**Status 2026-04-21: PARTIALLY BLOCKED.** SPI_CTL reads back
-cleanly as `0x00000501` (EN | EMISO | SIZE=2) after the
-struct-field fix. A boot-time SELFTEST that configures the
-module as master and clocks four 32-bit words out of PA4
-lands four full-duplex words in the RX FIFO, proving the
-peripheral, its clock, its pinmux at PA0..PA5 mux=1 ("b"),
-and the SCB5 pin routing are all functional.
+**Status 2026-04-21: PASS.** Slave-role SPI2 now receives
+the full 16-word PRBS burst from the FT4222-as-master
+host. Verified on hardware via
+`python3 ../../test_serv/submit.py --wait 60 --runtime 8
+--qspi spy.qspi main.ldr` with `SPY_ENABLE=1`: 16
+`SPY w=<hex>` lines (0x709a0e4a, 0xab40d513, ...,
+0x24437618) exactly match the bit-stream produced by
+`prbs_xorshift32(0x00C0FFEE, 64)` in
+`test_serv/poller.py`, and `ror=0` in the trailing status
+line.
 
-What does NOT work: running the module as slave and having
-the FT4222-master host clock bytes in. No bytes ever reach
-the RX FIFO, RFE stays latched, ROR never fires, across
-every combination tried:
+Root cause was three simultaneous bugs; any one of them
+alone produced "RFE stays latched" and masked the
+others:
 
-- PA0..PA4 alt-function mux=0/1/2/3
-- PA5 alt-function mux=0/1/2/3
-- SCB5_REMAP = 0 and 1
-- CPOL=0 with CPHA=0 and CPHA=1
-- PSSE on and off (ignore-SS-pin vs honor-SS-pin)
-- SOSI on and off (swap MISO/MOSI role in slave)
+1. **SPI_SLVSEL inherited from master SELFTEST.** HRM
+   15-68 (Table 15-31): `SPI_SLVSEL.SSE1` "enables the
+   related SPI_SEL[n] pin for output. If disabled, the SPI
+   three-states the related SPI_SEL[n] pin." A prior
+   master-mode SELFTEST left SSE1=1, so the peripheral
+   drove PA5 high from inside the DSP while acting as a
+   slave; the external FT4222 CS0 could not pull the line
+   low through the DSP's own driver, and the slave never
+   saw an SS falling edge. Fix: write SLVSEL
+   unconditionally on both transitions; slave value =
+   0x0000FE00, matching CCES's `DEFAULT_SPISLVSEL_OUTPUT`
+   in `adi_spi_data_2156x.c`.
 
-Because the master-mode self-test exercises the same pin
-group and is fine, and no firmware knob left to turn, the
-remaining candidates are all electrical / board-level:
+2. **PORTA_FER on slave input pins was load-bearing
+   incorrect.** HRM 12-41: "The function enable bits
+   **impact output control only**. Regardless of the
+   setting of the function enable bits, both GPIO and
+   peripherals can still sense the pin input."
+   Empirically on the 21569, forcing FER=1 on a slave's
+   input pins (MOSI, SCLK, SS, unused D2/D3) prevents the
+   receive shift register from promoting completed words
+   into RFIFO -- RFE stays latched for the full burst,
+   indistinguishable from "no clocks received at all".
+   Setting FER=0 on those pins (peripheral still reads the
+   pad per the HRM quote) lets every word land. Fix:
+   `pinmux_spi2` enables FER only on output pins -- in
+   master role all of PA0..PA5, in slave role only PA0
+   (MISO output).
 
-- FT4222's SCK / MOSI / SS lines routed to different DSP
-  pins than the SPI2 peripheral uses (USB_QSPI expander
-  path may land on OSPI pins only, which SCB5_REMAP would
-  decide between at boot time).
-- FT4222's master outputs floating / disabled after the
-  LDR-boot phase of the unified capture session.
+3. **SPI_CTL.CPHA sampled the wrong clock edge.**
+   `test_serv/poller.py :: _cpol_cpha` with flags=0 maps
+   to pyft4222's `Cpha.CLK_TRAILING`, which in standard
+   SPI terms is CPHA=1 (data latched on the second clock
+   edge). At CPHA=0 the few bytes that did land were all
+   right-shifted by one bit position. Fix: `.cpha =
+   master ? 0U : 1U` in `qspi/main.c :: spi_reconfigure`.
 
-Defer Steps 1-4 (slave-role PRBS) until that electrical
-question is answered. Move straight to Steps 5-10, which
-drive the bus from the DSP as master -- the SELFTEST
-proves that path already works.
+Supporting improvements (principled per HRM / CCES
+reference driver, but not individually sufficient):
+
+- `OSPI0_CTL.EN` cleared before SPI2 bring-up (boot ROM
+  may leave OSPI0 enabled and it contends with SPI2 for
+  the shared PA0..PA5 pin group).
+- `REG_SCB5_REMAP` cleared -- note this is a memory-map
+  remap only, not pin routing (see ADSP-SC592_typedefs.h
+  :: SCB5_SPI2_OSPI_REMAP enum; 21569 variant is 1-bit,
+  0=SPI2).
+- `SPI_TXCTL.TTI` / `SPI_RXCTL.RTI` cleared in slave mode.
+  Per HRM 15-66 both fields are "valid only when the SPI
+  is a master"; the CCES reference driver
+  `adi_spi_2156x.c :: EnableSPIChannel` clears both in
+  the slave branch.
+- `pinmux_spi2` for PA5: mux=1 (alt "b" = SPI2_SEL1b
+  output when master, SPI2_SSb input when slave). PORT_MUX
+  is 2 bits / pin (HRM 19-28), so any earlier claim that
+  SPI2_SSb lives at mux=3 was wrong -- that selects
+  SMC0_D05 (static memory controller data line).
+
+Bench diagnostic scaffold (SPY_ENABLE in `qspi/main.c`)
+is left in the tree, gated off by default. Set to 1 to
+re-run Step 0.5 before shipping Steps 1-4. With
+SPY_ENABLE=0 the command loop starts immediately after
+boot and Steps 5-10 proceed as before.
 
 ## 1. Slave, single-lane, polled (command baseline)
 

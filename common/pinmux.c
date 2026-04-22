@@ -39,40 +39,71 @@ void pinmux_twi2(void)
    MMR(REG_PORTA_FER) |= (PA_TWI2_SCL_FER_BIT | PA_TWI2_SDA_FER_BIT);
 }
 
-// SPI2 pins: PA0..PA5, alternate function "b" (mux value 1) on
-// PA0..PA4. In master role PA5 is SPI2_SEL1 (output, also alt
-// "b"); in slave role PA5 is SPI2_SS (input, alternate function
-// "d", mux value 3). Empirically verified by SELFTEST: PA0..PA4
-// at mux=1 with the SPI2 peripheral in master mode drives CLK
-// and returns full-duplex RX on MISO.
+// All six SPI2 signals (MISO/MOSI/D2/D3/CLK/SEL1|SS) are routed
+// to alt "b" (mux=1) on PA0..PA5 per the ADSP-21569 datasheet
+// pin-multiplexing table and HRM 12-61 ("01 = first alternate
+// peripheral option"). PA5 in particular exposes both SPI2_SEL1b
+// (master output) and SPI2_SSb (slave input) on the SAME alt
+// slot; the SPI block chooses input vs output internally based
+// on CTL.MSTR. PORT_MUX is only 2 bits wide per pin (HRM 19-28),
+// so any claim that SPI2_SSb lives at a different mux value is
+// wrong -- datasheet pin lists that separate "SEL1b" and "SSb"
+// are listing two peripheral-internal uses of the same alt slot,
+// not two distinct mux values. Earlier code programmed PA5 to
+// mux=3 in slave mode, which is actually SMC0_D05 (static
+// memory controller data line) and leaves the SPI block's SS
+// input unconnected -- SCLK still reached the peripheral (TUR
+// latched from the first clock edge) but the receive shifter
+// had no SS-falling-edge to frame against, and RFE never
+// cleared.
 #define PA_SPI2_FER_MASK 0x003FU // PA0..PA5
 // PORTA_MUX packs two bits per pin starting at bit 0 for PA0.
-#define PA0_MUX_POS         0U
-#define PA1_MUX_POS         2U
-#define PA2_MUX_POS         4U
-#define PA3_MUX_POS         6U
-#define PA4_MUX_POS         8U
-#define PA5_MUX_POS         10U
-#define SPI2_ALT_FN         1U // alternate function "b" on PA0..PA4
-#define PA5_SLAVE_SS_ALT_FN 3U // alternate function "d" on PA5 = SPI2_SS input
-#define PA5_MASTER_SEL1_ALT_FN                                                 \
-   1U // alternate function "b" on PA5 = SPI2_SEL1 output
+#define PA0_MUX_POS 0U
+#define PA1_MUX_POS 2U
+#define PA2_MUX_POS 4U
+#define PA3_MUX_POS 6U
+#define PA4_MUX_POS 8U
+#define PA5_MUX_POS 10U
+#define SPI2_ALT_FN 1U
 #define PA_SPI2_MUX_MASK                                                       \
    ((3U << PA0_MUX_POS) | (3U << PA1_MUX_POS) | (3U << PA2_MUX_POS) |          \
     (3U << PA3_MUX_POS) | (3U << PA4_MUX_POS) | (3U << PA5_MUX_POS))
+#define PA_SPI2_MUX_VAL                                                        \
+   ((SPI2_ALT_FN << PA0_MUX_POS) | (SPI2_ALT_FN << PA1_MUX_POS) |              \
+    (SPI2_ALT_FN << PA2_MUX_POS) | (SPI2_ALT_FN << PA3_MUX_POS) |              \
+    (SPI2_ALT_FN << PA4_MUX_POS) | (SPI2_ALT_FN << PA5_MUX_POS))
 
 void pinmux_spi2(int is_master)
 {
-   uint32_t pa0_4 = (SPI2_ALT_FN << PA0_MUX_POS) |
-                    (SPI2_ALT_FN << PA1_MUX_POS) |
-                    (SPI2_ALT_FN << PA2_MUX_POS) |
-                    (SPI2_ALT_FN << PA3_MUX_POS) | (SPI2_ALT_FN << PA4_MUX_POS);
-   uint32_t pa5_field =
-       (is_master ? PA5_MASTER_SEL1_ALT_FN : PA5_SLAVE_SS_ALT_FN)
-       << PA5_MUX_POS;
    uint32_t mux = MMR(REG_PORTA_MUX);
    mux &= ~PA_SPI2_MUX_MASK;
-   mux |= pa0_4 | pa5_field;
+   mux |= PA_SPI2_MUX_VAL;
    MMR(REG_PORTA_MUX) = mux;
-   MMR(REG_PORTA_FER) |= PA_SPI2_FER_MASK;
+
+   // PORT_FER "impact[s] output control only. Regardless of the
+   // setting of the function enable bits, both GPIO and
+   // peripherals can still sense the pin input." (HRM 18544.)
+   //
+   // Therefore enable FER bits only for the pins the peripheral
+   // actually needs to drive as outputs, and leave pure-input
+   // pins with FER=0. Empirically on this chip, forcing FER=1 on
+   // a slave's MOSI/SCLK/SS input pins stops the peripheral's
+   // internal receiver from ever promoting a shift-register
+   // value into SPI_RFIFO -- RFE stays latched for the full
+   // transfer. Walking the slave's input pins back to FER=0
+   // (GPIO mode, with the peripheral still sensing the pad per
+   // the HRM quote above) lets the slave frame every byte.
+   //
+   // Master-mode outputs (MOSI, CLK, SEL1): FER=1, MUX=1.
+   // Master-mode inputs (MISO, and slave-SS-as-master-MODF-in):
+   //   FER can be 0 and the peripheral still reads the pin.
+   // Slave-mode output (MISO only): FER=1, MUX=1.
+   // Slave-mode inputs (MOSI, CLK, SS, unused D2/D3): FER=0.
+   uint32_t fer = MMR(REG_PORTA_FER);
+   fer &= ~PA_SPI2_FER_MASK;
+   if (is_master)
+      fer |= PA_SPI2_FER_MASK; // PA0..PA5 all FER=1 (MOSI/CLK/SEL1 drive)
+   else
+      fer |= (1U << 0U); // PA0 (MISO) output only
+   MMR(REG_PORTA_FER) = fer;
 }

@@ -158,7 +158,15 @@ static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
        .miom      = miom,
        .is_master = master ? 1U : 0U,
        .cpol      = 0,
-       .cpha      = 0,
+       // HRM 15-30: "Once the SPI_SS falling edge is detected,
+       // the slave starts sending data on active SPI_CLK edges
+       // and sampling data on inactive SPI_CLK edges." The
+       // phase that satisfies this against the FT4222 host
+       // depends on the FT4222's Cpha setting: pyft4222 flags=0
+       // yields CLK_TRAILING = CPHA=1 in standard SPI terms
+       // (poller.py :: _cpol_cpha). Matching the slave at
+       // CPHA=1 is required for bit-accurate sampling.
+       .cpha      = master ? 0U : 1U,
        .lsb_first = 0,
    };
    // PA5 alt-function depends on master vs slave role; rerun
@@ -780,6 +788,96 @@ int main(void)
    // Back to slave for the SPY loop.
    spi_reconfigure(SPI_MIO_SINGLE, false, 0);
    printf("SELFTEST done, back to slave\r\n");
+
+   // SPY loop (Step 0.5 bring-up scaffold): poll SPI_STAT for
+   // incoming RX words and sample PORTA_DATA so we can tell from
+   // outside whether the external master is actually driving the
+   // SPI2 pin group at all. This loop blocks the UART command loop
+   // for its window, so it is gated behind SPY_ENABLE -- keep it
+   // compiled in only when bringing up slave-role; disable it
+   // (SPY_ENABLE = 0) when running Steps 5+ so the command path
+   // starts responding immediately.
+#define SPY_ENABLE 0
+#if SPY_ENABLE
+   // Enable input-enable on PA0..PA5 so PORTA_DATA reflects the live
+   // pin state even while the pins are in alt-function mode; the PADs
+   // input cell is shared with the SPI block so this is non-invasive.
+#define PA_SPI2_MASK 0x0000003FU // PA0..PA5
+   MMR(REG_PORTA_INEN_SET) = PA_SPI2_MASK;
+
+   // Diagnostic: disable PORTA_FER for PA0..PA5 so the pins are in
+   // pure GPIO input mode during the SPY window. That way
+   // PORTA_DATA read-back definitely reflects the live pin state
+   // rather than a peripheral-controlled shadow. The SPI
+   // peripheral still has its pad input connected so SPI_STAT
+   // behavior is unchanged, but now pin_or/pin_and actually
+   // capture external activity from FT4222 regardless of how
+   // the SPI block gates its internal SCLK receiver.
+   //
+   // Undone after the SPY window so normal operation resumes.
+#define SPY_FER_ENTER_GPIO 0
+#if SPY_FER_ENTER_GPIO
+   uint32_t saved_fer = MMR(REG_PORTA_FER);
+   MMR(REG_PORTA_FER) = saved_fer & ~PA_SPI2_MASK;
+#endif
+
+#define SPY_WINDOW_TICKS (700U * SCLK_TICKS_PER_MSEC) // 0.7 s
+#define SPY_STAT_LOG_CAP 64U
+#define SPY_WORD_CAP     32U // 16 words per 64-byte burst + slack
+   printf("SPY start: SPI_STAT=%08x PORTA=%08x\r\n",
+          MMR(spi_base + OFF_SPI_STAT), MMR(REG_PORTA_DATA) & PA_SPI2_MASK);
+   printf("SPY regs: CTL=%08x TXCTL=%08x RXCTL=%08x SLVSEL=%08x\r\n",
+          MMR(spi_base + OFF_SPI_CTL), MMR(spi_base + OFF_SPI_TXCTL),
+          MMR(spi_base + OFF_SPI_RXCTL), MMR(spi_base + OFF_SPI_SLVSEL));
+   printf("SPY pmux: PORTA_MUX=%08x PORTA_FER=%08x\r\n", MMR(REG_PORTA_MUX),
+          MMR(REG_PORTA_FER));
+   printf("SPY ospi: OSPI0_CTL=%08x SCB5_REMAP=%08x\r\n", MMR(REG_OSPI0_CTL),
+          MMR(REG_SCB5_REMAP));
+   {
+      // Drain RFIFO into an in-memory buffer during the active
+      // window; print the buffer only after the window closes.
+      // UART printf inside the polling loop is far slower than
+      // the FT4222 master can fill the 2-deep 32-bit RFIFO (one
+      // line is ~1.7 ms at 115200 baud; 16 words at 7.5 Mbit/s
+      // SCLK arrive in ~70 us), so inline printing would ROR
+      // the FIFO and drop most of the burst.
+      static uint32_t word_buf[SPY_WORD_CAP];
+      uint32_t nwords      = 0;
+      uint32_t pin_or      = 0;
+      uint32_t pin_and     = PA_SPI2_MASK;
+      uint32_t pin_samples = 0;
+      uint32_t t0          = timer_ticks();
+      uint32_t stat_first  = MMR(spi_base + OFF_SPI_STAT);
+      while ((timer_ticks() - t0) < SPY_WINDOW_TICKS) {
+         uint32_t stat = MMR(spi_base + OFF_SPI_STAT);
+         if (!(stat & BIT_SPI_STAT_RFE)) {
+            uint32_t w = MMR(spi_base + OFF_SPI_RFIFO);
+            if (nwords < SPY_WORD_CAP)
+               word_buf[nwords] = w;
+            nwords++;
+         }
+         uint32_t d = MMR(REG_PORTA_DATA) & PA_SPI2_MASK;
+         pin_or |= d;
+         pin_and &= d;
+         pin_samples++;
+      }
+      uint32_t stat_final = MMR(spi_base + OFF_SPI_STAT);
+      printf("SPY end: nwords=%u samples=%u pin_or=%02x pin_and=%02x\r\n",
+             nwords, pin_samples, pin_or, pin_and);
+      printf("SPY stat_first=%08x stat_final=%08x ror=%u\r\n", stat_first,
+             stat_final, (stat_final & BIT_SPI_STAT_ROR) ? 1U : 0U);
+      uint32_t n_print = nwords < SPY_WORD_CAP ? nwords : SPY_WORD_CAP;
+      for (uint32_t i = 0; i < n_print; i++)
+         printf("SPY w=%08x\r\n", word_buf[i]);
+      // W1C the latched error bits so the command loop starts
+      // from a clean STAT.
+      MMR(spi_base + OFF_SPI_STAT) =
+          BIT_SPI_STAT_ROR | BIT_SPI_STAT_TUR | BIT_SPI_STAT_TC;
+   }
+#if SPY_FER_ENTER_GPIO
+   MMR(REG_PORTA_FER) = saved_fer;
+#endif
+#endif // SPY_ENABLE
 
    static char line[CMD_BUF_SIZE];
    for (;;) {
