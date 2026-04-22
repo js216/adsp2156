@@ -108,4 +108,14 @@ void dma_disable(const enum dma_channel ch);
 //   returns: the byte address currently in ADDR_CUR.
 uint32_t dma_addr_cur(const enum dma_channel ch);
 
+// Read XCNT_CUR (remaining 32-bit words in the current pass).
+// Decrements from XCNT to zero; in FLOW=AUTO the hardware
+// reloads it to XCNT and the memory pointer wraps to
+// ADDRSTART. Sampling the register lets a CPU consumer chase
+// the DMA write pointer around a ring buffer without ever
+// stopping the channel.
+//   ch:      which DMA channel.
+//   returns: the word count currently in XCNT_CUR.
+uint32_t dma_xcnt_cur(const enum dma_channel ch);
+
 #endif // DMA_H

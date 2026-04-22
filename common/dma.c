@@ -138,6 +138,11 @@ uint32_t dma_addr_cur(const enum dma_channel ch)
    return MMR(dma_base(ch) + OFF_DMA_ADDR_CUR);
 }
 
+uint32_t dma_xcnt_cur(const enum dma_channel ch)
+{
+   return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR);
+}
+
 void dma_oneshot_config(const enum dma_channel ch, const struct dma_buf buf,
                         const enum dma_dir dir)
 {

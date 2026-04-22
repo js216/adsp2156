@@ -25,24 +25,34 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
    uint32_t base = SPI_BASE(id);
 
    // SPI2 shares its PA0..PA5 pin bus with OSPI0 (the chip's
-   // SPI3/OSPI controller). Two things have to be lined up or
-   // SPI2 never sees external traffic even though its own
-   // registers read back sensible values:
+   // SPI3/OSPI controller). Three things have to be lined up or
+   // SPI2 never sees external traffic cleanly:
    //
    //   1. SCB5_REMAP selects which block owns the SPI2 / OSPI
    //      memory-mapped flash window. 0 = SPI2. The boot ROM may
    //      leave this pointing at OSPI.
    //
    //   2. OSPI0_CTL.EN, if set, drives the shared PA0..PA5 pin
-   //      group even after SCB5_REMAP is cleared. The boot ROM
-   //      leaves OSPI0 enabled on parts that booted from OSPI
-   //      flash. Its drivers then fight the SPI2 pad drivers and
-   //      the slave-mode SPI2 receive path (which depends on
-   //      clean SS and SCLK edges) never advances -- TUR latches
-   //      from the first edge but SPI_STAT.RFE never clears.
-   //      Disable OSPI0 unconditionally before SPI2 comes up.
+   //      group. The boot ROM leaves OSPI0 enabled on parts that
+   //      booted from OSPI flash.
+   //
+   //   3. OSPI0_CTL.DACEN (Direct Access Controller Enable, bit
+   //      7) and the BAUD field stay set in the boot-ROM residual
+   //      configuration even after EN is cleared: a register read
+   //      shows OSPI0_CTL = 0x80780080 on our board right after
+   //      boot (IDLE=1, BAUD=0xf, DACEN=1, EN=0). In that state
+   //      OSPI's direct-access controller can still source onto
+   //      the shared pin group during a spurious AHB access --
+   //      the OSPI block's DAC engine is triggered by the first
+   //      read to its 256 MiB AHB window and keeps drivers live
+   //      until explicitly quiesced. Zero the whole control
+   //      register so every OSPI-driven path is off, not just EN.
+   //
+   // Under slave dual/quad RX this matters because PA0 (D1) is a
+   // pure external input -- any residual OSPI DAC drive on PA0
+   // would fight the host.
    if (id == SPI_ID_2) {
-      MMR(REG_OSPI0_CTL) &= ~BIT_OSPI_CTL_EN;
+      MMR(REG_OSPI0_CTL)  = 0U;
       MMR(REG_SCB5_REMAP) = 0U;
    }
 
@@ -54,6 +64,22 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
 
    // No inter-frame delay.
    MMR(base + OFF_SPI_DLY) = 0;
+
+   // Clear the transmit / receive word counters (TWC, TWCR, RWC,
+   // RWCR). When TWCEN / RWCEN is asserted the peripheral decrements
+   // the counter for every word transferred and stops the transfer
+   // at zero; even with TWCEN / RWCEN clear in this driver, the
+   // counters hold whatever stale value the previous bring-up
+   // sequence left behind. In particular, the boot-path SELFTEST
+   // runs SPI2 as a master clocking 4 words before this function
+   // is reconfigured into a slave -- leaving counter state that
+   // would kick in if a later reconfig accidentally (or
+   // deliberately) enables the word-count gate. Zero them
+   // unconditionally so every bring-up starts from a clean slate.
+   MMR(base + OFF_SPI_TWC)  = 0;
+   MMR(base + OFF_SPI_TWCR) = 0;
+   MMR(base + OFF_SPI_RWC)  = 0;
+   MMR(base + OFF_SPI_RWCR) = 0;
 
    // Clear any pending status / interrupt latch bits.
    MMR(base + OFF_SPI_STAT)     = MMR(base + OFF_SPI_STAT);
@@ -74,18 +100,26 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
    ctl |= (cfg->size & 3U) << POS_SPI_CTL_SIZE;
    ctl |= (cfg->miom & 3U) << POS_SPI_CTL_MIOM;
 
-   // Slave role: enable MISO output + PSSE so the slave honors
-   // the pin slave-select (SPI_SS) input. Master role: enable
-   // ASSEL so the SEL1 pin automatically tracks the transfer;
-   // the driver's SLVSEL programming below picks SEL1 as the
-   // active line.
-   // Diagnostic: also set SOSI, because the original peripheral
-   // reset state had bit 22 high and we never verified which
-   // bits are hardware-required.
-   if (!cfg->is_master)
-      ctl |= BIT_SPI_CTL_EMISO;
-   else
+   // Slave role: enable MISO output only in single-lane mode.
+   // EMISO gates the peripheral's PA0 (SPI2_MISO / D1) output
+   // driver. In single-lane slave that is correct -- the slave
+   // sources MISO data from its TX shift register. In dual and
+   // quad slave mode PA0 is a *receive* lane (D1) driven by the
+   // external master; enabling EMISO there creates contention
+   // between the peripheral's TX shifter and the incoming data.
+   // The symptom on hardware is lane-D1 bits reading stuck at 1
+   // starting after the first few bytes, once the TX-side logic
+   // kicks in and begins sourcing onto PA0. Matches HRM 15-64:
+   // "EMISO is valid only for MISO mode (single-lane slave)."
+   // Master role: enable ASSEL so the SEL1 pin automatically
+   // tracks the transfer; the driver's SLVSEL programming below
+   // picks SEL1 as the active line.
+   if (!cfg->is_master) {
+      if (cfg->miom == SPI_MIO_SINGLE)
+         ctl |= BIT_SPI_CTL_EMISO;
+   } else {
       ctl |= BIT_SPI_CTL_ASSEL;
+   }
 
    MMR(base + OFF_SPI_CTL) = ctl;
 
