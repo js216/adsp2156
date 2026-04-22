@@ -123,6 +123,17 @@ Once SPY proves the SPI slave captures clean words:
 - Expect `PRBSDMA ... OK`. Verifies SPI2_RX DMA channel (DMA27)
   and the new `dma_oneshot_config` path in common/dma.c.
 
+**Status 2026-04-21: PASS.** Hardware capture:
+`PRBSDMA mode=x1 seed=0x00c0ffee N=64 OK ticks=9313977 ror=0`
+after `M1\n` then `D c0ffee 64\n` followed by the host
+`write_prbs(0xC0FFEE, 64)`. Passed on first try against the
+fixes already landed in Step 0.5 / Step 1; the `dma_oneshot_config`
+path in `common/dma.c` and `spi_rx_dma_enable` in `common/spi.c`
+deliver 16 32-bit words (64 B) from SPI2_RX -> DMA27 -> `dma_rx_buf`
+cleanly, with zero ROR. Regression re-run of step1.qspi and
+step5.qspi both still PASS (`PRBS ... OK ticks=9300723 ror=0`,
+`TX0 mode=x1 N=64 ticks=151 tur=0`).
+
 ## 3. Slave, lane-width sweep
 
 - `M2` then repeat steps 1 and 2; then `M4` and repeat.
