@@ -170,3 +170,15 @@ bool dma_done(const enum dma_channel ch)
 {
    return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR) == 0U;
 }
+
+#define BIT_DMA_STAT_IRQDONE (1U << 0U) // HRM 27-66, Table 27-25 bit 0
+
+bool dma_wrap_check(const enum dma_channel ch)
+{
+   uint32_t addr = dma_base(ch) + OFF_DMA_STAT;
+   uint32_t stat = MMR(addr);
+   if (!(stat & BIT_DMA_STAT_IRQDONE))
+      return false;
+   MMR(addr) = BIT_DMA_STAT_IRQDONE; // W1C
+   return true;
+}

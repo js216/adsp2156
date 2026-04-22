@@ -118,4 +118,15 @@ uint32_t dma_addr_cur(const enum dma_channel ch);
 //   returns: the word count currently in XCNT_CUR.
 uint32_t dma_xcnt_cur(const enum dma_channel ch);
 
+// Test + clear the DMA_STAT.IRQDONE latch for the given channel.
+// IRQDONE latches when XCNT_CUR underflows (= one work-unit /
+// ring-wrap completion in FLOW=AUTO).  Returns true if the bit
+// was set at entry; the bit is cleared via the hardware's W1C
+// behaviour before returning.  Lets a CPU consumer detect "at
+// least one ring wrap happened since my last check" without
+// needing an interrupt handler.
+//   ch:      which DMA channel.
+//   returns: true if IRQDONE was set (and is now cleared).
+bool dma_wrap_check(const enum dma_channel ch);
+
 #endif // DMA_H

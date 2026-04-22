@@ -4,6 +4,72 @@ Bring-up order for the new command protocol on real hardware.
 Each step depends on the previous one passing; stop and debug
 before moving on.
 
+Check documentation in doc/ for any hardware questions.
+
+## FT4222 multi-IO first-byte hazard (MUST READ)
+
+Empirically confirmed on this hardware, AD eval board + FT4222
+connected as SPI master, DSP SPI2 slave:
+
+**The first byte clocked out by the FT4222 in a dual-IO or
+quad-IO `SPIMaster_MultiReadWrite` CS frame can corrupt the
+DSP's D1-lane sampling for the entire rest of that CS frame.**
+
+Symptom: the DSP receives word 0 correctly, but from word 1
+onward the D1 lane (PA0 / MISO) reads as stuck-at-0 -- every
+expected `1` bit in a D1 position is sampled as `0`. D0, D2,
+D3 remain clean.
+
+Trigger: content-specific. Specific byte values at the start
+of the CS frame (e.g. 0x0d4416c4, s123[0:4]) poison the
+receiver for the duration; most byte values (e.g. 0x00000000,
+0xFFFFFFFF, 0xc8ad14e5, random seeds that don't hit the
+trigger) leave it clean. An exhaustive 2^32 sweep is infeasible
+(~163 years at 1 s/test), so the safe rule is simpler than
+enumerating bad patterns.
+
+Rule: **every dual-IO / quad-IO CS frame must start with a
+zero word** (four bytes of `0x00`). That is:
+
+    dev.spiMaster_MultiReadWrite(b"", b"\x00\x00\x00\x00" + payload, 0)
+
+Verified clean on 64 KiB + 4 B streams via chunked TLVs, each
+chunk prefixed with a zero word, all bytes accounted for and
+checksum-matched.
+
+Why this works: per AN_329 section 3.4.6 `FT4222_SPISlave_Write`:
+
+> "For some reasons, support lib will append a dummy byte
+>  (0x00) at the first byte automatically. This additional
+>  byte exists at all the three transfer methods."
+
+FTDI documents the equivalent auto-prepend for the slave-write
+path but not for `MultiReadWrite`. Our findings match: same
+underlying chip hazard, not worked around in the master multi-IO
+path. Prepending the zero word replicates the fix manually.
+
+Implementation choice (see discussion in session log): keep
+the prefix in the test-case generators, not in `poller.py`.
+Reasons: poller stays a dumb byte forwarder; single-IO tests
+(tag 0x07 `write_prbs`, tag 0x01 `write`) don't need the
+prefix; pattern-probing tests (w0 sweeps) deliberately send
+non-zero first words; DSP firmware needs no changes. Helper
+in `make_qspi.py`:
+
+    def mixed_xfer_safe(single_buf, multi_w_buf, nread):
+        return mixed_xfer(single_buf, b"\x00\x00\x00\x00"
+                          + multi_w_buf, nread)
+
+Checksum math is unaffected: `running_xor(b"\x00\x00\x00\x00"
++ data) == running_xor(data)`, so existing test assertions on
+host-side computed sums still match the DSP's XOR accumulator.
+
+Per-call cap on `MultiReadWrite`: libft4222 doc says 65535 B
+max for `multiWriteBytes`, but empirical `FAILED_TO_WRITE_DEVICE`
+at 65532 B suggests the real cap is lower. Use TLV chunks
+<= 65528 B including the 4 B zero prefix (= 65524 B of user
+payload per chunk) to stay safely under.
+
 ## Submit recipe
 
 Every step runs as one stapled job so UART + scope span reset
