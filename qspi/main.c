@@ -110,6 +110,17 @@
 // count re-arm the DMA channel in chunks of this size.
 #define DMA_BUF_WORDS (16U * 1024U / 4U) // 16 KiB
 
+// SPI2 TFIFO depth on the ADSP-21569 is 4 32-bit words.  In
+// master mode the peripheral transmits whatever lands in the
+// FIFO, drains to empty, and then becomes idle; subsequent
+// pushes do not restart the clock until TS has seen a full
+// 1->0 transition since the previous burst.  Pushing more than
+// TFIFO_DEPTH words back-to-back without waiting for TS leaves
+// TFF latched and the whole peripheral stalled.  Break long
+// transmits into TFIFO_DEPTH-sized bursts and drain between
+// each so TS does its toggle.
+#define SPI_TFIFO_DEPTH 4U
+
 static uint32_t dma_rx_buf[DMA_BUF_WORDS];
 
 static uint32_t spi_base;
@@ -394,20 +405,27 @@ static void op_prbs_tx(uint32_t seed, uint32_t count)
    uint32_t state = seed ? seed : 1U;
    uint32_t words = count / BYTES_PER_WORD;
 
+   // Same chunked-refill pattern as op_tx_zeros: push up to
+   // SPI_TFIFO_DEPTH words, drain via TS, repeat.  The peripheral
+   // does not accept a refill before TS has toggled, so a simple
+   // while (TFF) push loop stalls at the fifth word.
    uint32_t t0 = timer_ticks();
-   for (uint32_t i = 0; i < words; i++) {
-      uint32_t w = 0;
-      for (unsigned b = 0; b < BYTES_PER_WORD; b++) {
-         unsigned shift = WORD_MSB_SHIFT - (b * BITS_PER_BYTE);
-         w |= (uint32_t)prbs_next(&state) << shift;
+   uint32_t i  = 0;
+   while (i < words) {
+      uint32_t chunk =
+          (words - i) > SPI_TFIFO_DEPTH ? SPI_TFIFO_DEPTH : (words - i);
+      for (uint32_t j = 0; j < chunk; j++) {
+         uint32_t w = 0;
+         for (unsigned b = 0; b < BYTES_PER_WORD; b++) {
+            unsigned shift = WORD_MSB_SHIFT - (b * BITS_PER_BYTE);
+            w |= (uint32_t)prbs_next(&state) << shift;
+         }
+         MMR(spi_base + OFF_SPI_TFIFO) = w;
       }
-      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF)
+      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
          ;
-      MMR(spi_base + OFF_SPI_TFIFO) = w;
+      i += chunk;
    }
-   // Wait for the TX shift register and FIFO to fully drain.
-   while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
-      ;
    uint32_t elapsed = timer_ticks() - t0;
 
    uint32_t stat = MMR(spi_base + OFF_SPI_STAT);
@@ -426,22 +444,16 @@ static void op_tx_zeros(uint32_t count)
 {
    uint32_t words = count / BYTES_PER_WORD;
    uint32_t t0    = timer_ticks();
-   for (uint32_t i = 0; i < words; i++) {
-#define TX0_SPIN_TIMEOUT_MS 100U
-#define TX0_SCLK_PER_MS     93750U // SCLK0 ticks per millisecond
-      uint32_t spin_start = timer_ticks();
-      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF) {
-         if (timer_ticks() - spin_start >
-             (TX0_SPIN_TIMEOUT_MS * TX0_SCLK_PER_MS)) {
-            printf("TX0 stuck i=%u stat=%08x\r\n", (unsigned)i,
-                   MMR(spi_base + OFF_SPI_STAT));
-            return;
-         }
-      }
-      MMR(spi_base + OFF_SPI_TFIFO) = 0U;
+   uint32_t i     = 0;
+   while (i < words) {
+      uint32_t chunk =
+          (words - i) > SPI_TFIFO_DEPTH ? SPI_TFIFO_DEPTH : (words - i);
+      for (uint32_t j = 0; j < chunk; j++)
+         MMR(spi_base + OFF_SPI_TFIFO) = 0U;
+      while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
+         ;
+      i += chunk;
    }
-   while (MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TS)
-      ;
    uint32_t elapsed = timer_ticks() - t0;
 
    uint32_t stat = MMR(spi_base + OFF_SPI_STAT);
