@@ -127,14 +127,12 @@ static uint32_t cksum_xor   = 0;
 static uint32_t cksum_count = 0;
 // Always-on DMA ring bookkeeping.  Armed at boot in slave role so
 // data received before `h` is already in the ring.  Ping-pong
-// rhythm: dma_half_ready latches true when IRQDONE is observed
-// (dma_wrap_check); drain_poll_new_words reports how many words
-// in the currently-ready half are still unread; rd_pos advances
-// through that half and, on crossing a half-boundary, clears
-// dma_half_ready so the next IRQDONE arms the next drain wave.
+// rhythm: drain_poll_new_words compares the half rd_pos is in
+// against the half DMA_ADDR_CUR is in; when they differ, the
+// consumer's half has been fully written and those words are
+// ready to consume.
 static bool dma_armed      = false;
 static uint32_t dma_rd_pos = 0;
-static bool dma_half_ready = false;
 // Auto-consume: when true, the shell's idle-wait loop continuously
 // samples the DMA ring and folds new words into the running
 // checksum.  This keeps up with DMA on bursts larger than the ring
@@ -184,9 +182,6 @@ static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
    spi_init(SPI_PORT, &cfg);
    if (!master)
       spi_rx_dma_enable(SPI_PORT);
-   // TEN only when DSP sources data.  In slave dual/quad the TX
-   // shifter has no useful data; TEN=1 + underrun drives idle
-   // pattern onto MISO/D1 (PA0) and contends with the master.
    if (master)
       spi_tx_enable(SPI_PORT);
    spi_rx_enable(SPI_PORT);
@@ -230,46 +225,55 @@ static void drain_arm(void)
    dma_half_words = dma_active_words >> 1U;
    dma_pingpong_rx_config(SPI_RX_DMA, dma_rx_buf, dma_rx_buf + dma_half_words,
                           dma_half_words, dma_desc);
-   dma_armed      = true;
-   dma_rd_pos     = 0;
-   dma_half_ready = false;
-   cksum_xor      = 0;
-   cksum_count    = 0;
+   dma_armed   = true;
+   dma_rd_pos  = 0;
+   cksum_xor   = 0;
+   cksum_count = 0;
 }
 
 // Return the number of DMA-written words currently available for
-// the consumer to read starting at dma_rx_buf[dma_rd_pos].  Works
-// with the two-descriptor ping-pong config: each descriptor fills
-// one half, raises IRQDONE, then hands off to its sibling.  The CPU
-// observes the IRQDONE latch and drains the completed half while
-// the DMA writes the other one.
+// the consumer to read starting at dma_rx_buf[dma_rd_pos].  Detects
+// half-boundary crossings by watching DMA_ADDR_CUR rather than the
+// IRQDONE latch: polling DMA_STAT and W1Cing IRQDONE during an
+// active transfer appears to stall the channel (data stops landing
+// until polling stops).  Reading ADDR_CUR is passive -- HRM warns
+// it may be a few cycles stale, but a few bytes of slop in a
+// 256 KiB half is irrelevant.
 //
-// State machine:
-//   !dma_half_ready   -> poll dma_wrap_check; if set, a half just
-//                         completed -> dma_half_ready = true.
-//    dma_half_ready   -> return (half_words - offset_in_half);
-//                         caller advances rd_pos through those
-//                         words.  When rd_pos crosses the half
-//                         boundary, drop back to !ready and the
-//                         next wrap_check re-arms the drain.
+// Which half DMA is currently writing is inferred from ADDR_CUR:
+//   base .. base+half*4 -> DMA in half 0, half 1 was just drained.
+//   base+half*4 .. end  -> DMA in half 1, half 0 was just drained.
+// If DMA's current half != the half the consumer is about to read,
+// that means the consumer's half has been fully written and is
+// safe to drain.
 static uint32_t drain_poll_new_words(void)
 {
    if (!dma_armed)
       return 0;
    uint32_t hw       = dma_half_words;
    uint32_t half_off = dma_rd_pos;
-   if (half_off >= hw)
+   uint32_t cpu_half = 0U;
+   if (half_off >= hw) {
       half_off -= hw;
-   if (half_off == 0U && dma_half_ready) {
-      // Consumer just finished draining a full half.  Wait for the
-      // next IRQDONE before reporting anything from the next half.
-      dma_half_ready = false;
+      cpu_half = 1U;
    }
-   if (!dma_half_ready) {
-      if (!dma_wrap_check(SPI_RX_DMA))
-         return 0;
-      dma_half_ready = true;
+   uint32_t addr = dma_addr_cur(SPI_RX_DMA);
+   // Translate system-alias address back to dma_rx_buf offset.
+   // dma_rx_buf lives in L2 at identity-mapped address, so subtract
+   // base directly.
+   uint32_t byte_off = addr - (uint32_t)(dma_rx_buf);
+   uint32_t dma_half = (byte_off >= (hw * BYTES_PER_WORD)) ? 1U : 0U;
+   if (cpu_half == dma_half) {
+      // DMA still writing the half the consumer wants to read.
+      // Only safe to consume up to what DMA has written in the
+      // current half; but the consumer's position is either at the
+      // start (no IRQDONE yet for this half) or mid-drain (already
+      // saw IRQDONE and some words).  Return 0 -- nothing new is
+      // guaranteed complete.
+      return 0;
    }
+   // DMA has moved into the other half, so cpu_half is fully
+   // written from rd_pos to the half end.
    return hw - half_off;
 }
 
@@ -348,14 +352,29 @@ static void drain_consume_into_cksum(void);
 // ring sample so bursts longer than the ring size don't lose data
 // between `i` calls.  Gate on `auto_consume` so the feature can
 // be disabled for tests that need to observe uncounted ring state.
+// How many uart-try polls between drain samples.  Hitting
+// DMA_ADDR_CUR at full core speed (~100s of kHz) appears to
+// starve the SPI->DMA peripheral-request path on this silicon:
+// data stops landing until the polling stops.  One sample per
+// AUTO_DRAIN_INTERVAL uart polls is plenty -- each half takes
+// ~77 ms to fill at 10 MHz quad, so even 100 Hz drain rate has
+// 3 orders of magnitude of margin.
+#define AUTO_DRAIN_INTERVAL 1024U
+
 static int uart_getc_block(void)
 {
+   static uint32_t drain_tick = 0;
    for (;;) {
       int c = uart_try_getc();
       if (c >= 0)
          return c;
-      if (auto_consume)
-         drain_consume_into_cksum();
+      if (auto_consume) {
+         drain_tick++;
+         if (drain_tick >= AUTO_DRAIN_INTERVAL) {
+            drain_tick = 0;
+            drain_consume_into_cksum();
+         }
+      }
    }
 }
 
@@ -537,13 +556,24 @@ static void drain_consume_into_cksum(void)
 {
    if (!dma_armed)
       return;
-   uint32_t nw = drain_poll_new_words();
-   for (uint32_t k = 0; k < nw; k++) {
-      cksum_xor ^= dma_rx_buf[dma_rd_pos];
-      cksum_count++;
-      dma_rd_pos++;
-      if (dma_rd_pos == dma_active_words)
-         dma_rd_pos = 0;
+   // Loop until no more complete halves are pending.  IRQDONE is a
+   // single-bit latch; each pass through here clears it (via
+   // drain_poll_new_words -> dma_wrap_check) and drains one half,
+   // then the next call picks up the following half if DMA has
+   // already finished it.  Without the loop, `i` only catches the
+   // latest half and loses any earlier halves that piled up while
+   // auto_consume was off.
+   for (;;) {
+      uint32_t nw = drain_poll_new_words();
+      if (nw == 0U)
+         break;
+      for (uint32_t k = 0; k < nw; k++) {
+         cksum_xor ^= dma_rx_buf[dma_rd_pos];
+         cksum_count++;
+         dma_rd_pos++;
+         if (dma_rd_pos == dma_active_words)
+            dma_rd_pos = 0;
+      }
    }
 }
 

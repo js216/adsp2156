@@ -150,6 +150,15 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
                             const void *buf_b, uint32_t half_words,
                             struct dma_dscl desc[2]);
 
+// Poll DMA_STAT.RUN until the channel reports idle/stop state
+// (value 0).  Call after dma_disable() and before reconfiguring the
+// channel, so any outstanding memory transactions finish before the
+// new config goes in (HRM 27-20 caution: "Programs must ensure that
+// all outstanding memory transactions complete before reconfiguring
+// the DMA channel").
+//   ch: which DMA channel.
+void dma_wait_idle(const enum dma_channel ch);
+
 // Read the raw DMA_STAT register for the channel.  Used by shells
 // and bring-up tools to inspect IRQERR/ERRC/RUN without making the
 // MMR address a magic number at the call site.

@@ -71,6 +71,8 @@
 
 // DMA_STAT bits (HRM 27-66, Table 27-25).
 #define BIT_DMA_STAT_IRQDONE (1U << 0U)
+#define POS_DMA_STAT_RUN     8U
+#define MASK_DMA_STAT_RUN    (7U << POS_DMA_STAT_RUN)
 
 // L1 system-port alias range. The SHARC+ core sees the 1.5 MB
 // of L1 SRAM through a low byte-address window at L1_INT_BASE;
@@ -221,6 +223,13 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
    MMR(base + OFF_DMA_YCNT)       = 0U;
    MMR(base + OFF_DMA_YMOD)       = 0U;
    MMR(base + OFF_DMA_CFG)        = cfg;
+}
+
+void dma_wait_idle(const enum dma_channel ch)
+{
+   uint32_t addr = dma_base(ch) + OFF_DMA_STAT;
+   while ((MMR(addr) & MASK_DMA_STAT_RUN) != 0U) {
+   }
 }
 
 uint32_t dma_stat_raw(const enum dma_channel ch)
