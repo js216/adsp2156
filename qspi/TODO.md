@@ -163,6 +163,46 @@ step5.qspi both still PASS (`PRBS ... OK ticks=9300723 ror=0`,
 - Watch for ROR once bit rate climbs. FT4222 max ~30 Mbit/s in
   quad @ DIV_8; DMA must keep up.
 
+**Status 2026-04-21: PASS.** Combined job `step3.qspi` exercises
+all four (lane-width x polled/DMA) variants in one DSP session
+(`M2 -> P -> D -> M4 -> P -> D`) with a host-side `reinit` from
+DUAL to QUAD between the M2 and M4 blocks. Hardware capture,
+single submit:
+
+    PRBS    mode=x2 seed=0x00c0ffee N=64 OK ticks=9302197 ror=0
+    PRBSDMA mode=x2 seed=0x00c0ffee N=64 OK ticks=9295393 ror=0
+    PRBS    mode=x4 seed=0x00c0ffee N=64 OK ticks=9282474 ror=0
+    PRBSDMA mode=x4 seed=0x00c0ffee N=64 OK ticks=9315564 ror=0
+
+Two changes were required to make dual/quad slave RX work:
+
+1. **Host-side: the stock `write_prbs` (tag 0x07) uses
+   `spiMaster_SingleWrite`, which in FT4222 only drives MOSI
+   (D0) regardless of the init mode.** It cannot exercise the
+   DSP's dual/quad slave receiver even when the FT4222 master
+   is initialised with `MODE_DUAL` / `MODE_QUAD`. Added
+   `make_qspi.write_prbs_multi(seed, n)` which wraps
+   `mixed_xfer(b"", prbs, 0)` -- the payload lands in the
+   MultiReadWrite multi-IO write phase and is actually
+   spread across D0/D1 (dual) or D0..D3 (quad).
+
+2. **Firmware-side: `pinmux_spi2` kept PA0 (D1 / MISO) FER=1
+   in every slave role, which is correct for single-lane
+   slave (where PA0 is the sole driven output) but wrong for
+   dual/quad slave receive**, where PA0..PA3 are all inputs
+   from the external master; leaving FER=1 on a received
+   data lane has the DSP's pad driver fight the host. Fix:
+   `pinmux_spi2` now takes a `miom` parameter, and the slave
+   branch sets FER=1<<0 only for SPI_MIO_SINGLE. Dual and
+   quad slave RX clear FER on all of PA0..PA3 (INEN stays
+   set on the whole PA0..PA5 group per Step 1's fix, so the
+   peripheral still reads the pads).
+
+Regression after the fix: step1.qspi, step2.qspi, step5.qspi
+all still PASS (`PRBS mode=x1 ... OK ticks=9286555 ror=0`,
+`PRBSDMA mode=x1 ... OK ticks=9287895 ror=0`,
+`TX0 mode=x1 N=64 ticks=151 tur=0`).
+
 ## 4. Slave, long-burst
 
 - `M4`, then `D decaf 1048576\n`. Checks that chunked DMA

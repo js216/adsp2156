@@ -28,6 +28,16 @@ void pinmux_twi2(void);
 // function "b" (mux 1, SPI2_SEL1 output) and slave role uses
 // function "d" (mux 3, SPI2_SS input). Also sets PORTA_FER to
 // hand the pins over to the peripheral.
-void pinmux_spi2(int is_master);
+//
+// ``miom`` selects the lane width (0 = single, 1 = dual,
+// 2 = quad). It governs PORTA_FER on the slave's data pins:
+// in single-lane slave role PA0 (MISO) is a driven output and
+// keeps FER=1, but in dual/quad slave receive PA0 (D1), PA1
+// (D0), and -- for quad only -- PA2/PA3 (D2/D3) are inputs
+// from the external master, so FER must stay clear on those
+// pins or the DSP's pad driver will fight the host. Master
+// role always needs FER=1 on all of PA0..PA5 so the peripheral
+// drives CLK/SEL1/MOSI (and D1..D3 when in dual/quad master).
+void pinmux_spi2(int is_master, unsigned miom);
 
 #endif // PINMUX_H

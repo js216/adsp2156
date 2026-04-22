@@ -169,9 +169,11 @@ static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
        .cpha      = master ? 0U : 1U,
        .lsb_first = 0,
    };
-   // PA5 alt-function depends on master vs slave role; rerun
-   // the pinmux every time to cover the runtime role switch.
-   pinmux_spi2(master ? 1 : 0);
+   // PA5 alt-function depends on master vs slave role, and the
+   // slave data-lane FER programming depends on lane width, so
+   // rerun the pinmux every time to cover runtime M1/M2/M4 and
+   // Rs/Rm transitions.
+   pinmux_spi2(master ? 1 : 0, (unsigned)miom);
    spi_init(SPI_PORT, &cfg);
    if (!master)
       spi_rx_dma_enable(SPI_PORT);

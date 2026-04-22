@@ -73,7 +73,14 @@ void pinmux_twi2(void)
     (SPI2_ALT_FN << PA2_MUX_POS) | (SPI2_ALT_FN << PA3_MUX_POS) |              \
     (SPI2_ALT_FN << PA4_MUX_POS) | (SPI2_ALT_FN << PA5_MUX_POS))
 
-void pinmux_spi2(int is_master)
+// enum spi_miom values that matter to the pinmux (kept in sync
+// with common/spi.h :: enum spi_miom; a local copy avoids a
+// header dependency cycle between pinmux.h and spi.h).
+#define PINMUX_MIOM_SINGLE 0U
+#define PINMUX_MIOM_DUAL   1U
+#define PINMUX_MIOM_QUAD   2U
+
+void pinmux_spi2(int is_master, unsigned miom)
 {
    uint32_t mux = MMR(REG_PORTA_MUX);
    mux &= ~PA_SPI2_MUX_MASK;
@@ -94,17 +101,31 @@ void pinmux_spi2(int is_master)
    // (GPIO mode, with the peripheral still sensing the pad per
    // the HRM quote above) lets the slave frame every byte.
    //
-   // Master-mode outputs (MOSI, CLK, SEL1): FER=1, MUX=1.
-   // Master-mode inputs (MISO, and slave-SS-as-master-MODF-in):
-   //   FER can be 0 and the peripheral still reads the pin.
-   // Slave-mode output (MISO only): FER=1, MUX=1.
-   // Slave-mode inputs (MOSI, CLK, SS, unused D2/D3): FER=0.
+   // Master-mode outputs (MOSI, CLK, SEL1): FER=1, MUX=1. In
+   //   dual/quad master the data lanes (PA0=D1, PA2=D2, PA3=D3)
+   //   are also outputs so the full PA0..PA5 mask applies.
+   // Master-mode inputs (MISO in single-lane, and slave-SS-as-
+   //   master-MODF in): FER can be 0 and the peripheral still
+   //   reads the pin. We set the full mask in master role; MODF
+   //   is disabled elsewhere so the PA5 FER bit is harmless.
+   // Slave single-lane: MISO (PA0) is the one driven output;
+   //   everything else is an input. FER = 1 << 0.
+   // Slave dual-lane RX: PA0 (D1) and PA1 (D0) are both inputs
+   //   from the external master. FER must be 0 on both or the
+   //   DSP's pad driver contends with the host.
+   // Slave quad-lane RX: PA0..PA3 (D1/D0/D2/D3) are all inputs.
+   //   FER = 0 on all four.
    uint32_t fer = MMR(REG_PORTA_FER);
    fer &= ~PA_SPI2_FER_MASK;
-   if (is_master)
-      fer |= PA_SPI2_FER_MASK; // PA0..PA5 all FER=1 (MOSI/CLK/SEL1 drive)
-   else
+   if (is_master) {
+      fer |= PA_SPI2_FER_MASK;
+   } else if (miom == PINMUX_MIOM_SINGLE) {
       fer |= (1U << 0U); // PA0 (MISO) output only
+   } else {
+      // dual/quad slave receive: every data lane is an input,
+      // leave FER clear on PA0..PA3. CLK/SS (PA4/PA5) are
+      // inputs in every slave variant so they stay FER=0 too.
+   }
    MMR(REG_PORTA_FER) = fer;
 
    // HRM 12-49: PORTA_INEN[n] enables the pad's input buffer.
