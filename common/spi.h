@@ -53,6 +53,17 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg);
 void spi_tx_enable(enum spi_id id);
 void spi_rx_enable(enum spi_id id);
 
+// Bring the SPI module to a quiescent state and clear SPI_CTL.
+// HRM 15-12 requires the SPI to be quiescent before a MIOM change
+// (single / dual / quad); without that guarantee the new lane
+// config can be applied mid-word and the opening bytes of the
+// first transfer in the new mode go missing.  Polls SPI_STAT.SPIF
+// (with a bounded timeout so a wedged slave can't hang the shell)
+// and then drops CTL.EN.  Also W1Cs the sticky status bits so the
+// next spi_init starts from a clean slate.
+//   id: which SPI controller.
+void spi_disable(enum spi_id id);
+
 // Enable the RX DMA request line. The SPI peripheral will
 // request a DMA transfer whenever its RX FIFO is non-empty,
 // allowing the SPI0/1/2_RX DMA channel (22/24/26) to drain

@@ -178,17 +178,31 @@ static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
        .lsb_first = 0,
    };
    drain_disarm();
+   // HRM 15-12: "Changing to quad SPI mode must be done when the
+   // SPI is in a quiescent state."  spi_disable blocks until
+   // SPIF=1 (no active transfer) and RFE=1 (RX FIFO drained), then
+   // clears CTL.EN.  Must happen before pinmux_spi2 toggles FER
+   // bits -- changing pin function while the SPI shifter is active
+   // drops the opening bytes of the first transfer in the new
+   // mode, which was the observed startup race.
+   spi_disable(SPI_PORT);
    pinmux_spi2(master ? 1 : 0, (unsigned)miom);
    spi_init(SPI_PORT, &cfg);
    if (!master)
       spi_rx_dma_enable(SPI_PORT);
-   if (master)
-      spi_tx_enable(SPI_PORT);
-   spi_rx_enable(SPI_PORT);
    current_miom   = miom;
    current_master = master;
    current_clkdiv = clkdiv;
+   // Arm DMA before enabling the SPI RX channel so the DDE is
+   // already in data-transfer state by the time the first word
+   // can hit the 2-deep RFIFO.  Reversing this order leaves a
+   // window where RFIFO can overrun (ROR latched, channel wedged)
+   // if the external master sends immediately after it observes
+   // our UART ack of the mode command.
    drain_arm();
+   if (master)
+      spi_tx_enable(SPI_PORT);
+   spi_rx_enable(SPI_PORT);
 }
 
 static void spi_rx_flush(void)
@@ -257,11 +271,20 @@ static uint32_t drain_poll_new_words(void)
       half_off -= hw;
       cpu_half = 1U;
    }
-   uint32_t addr = dma_addr_cur(SPI_RX_DMA);
-   // Translate system-alias address back to dma_rx_buf offset.
-   // dma_rx_buf lives in L2 at identity-mapped address, so subtract
-   // base directly.
-   uint32_t byte_off = addr - (uint32_t)(dma_rx_buf);
+   uint32_t addr    = dma_addr_cur(SPI_RX_DMA);
+   uint32_t buf_lo  = (uint32_t)(dma_rx_buf);
+   uint32_t buf_end = buf_lo + (dma_active_words * BYTES_PER_WORD);
+   // DMA_ADDR_CUR is not guaranteed valid until the first data
+   // transfer completes (HRM 27-16).  Before then the register
+   // can read 0 or any prior value; treat any out-of-range read
+   // as "channel not yet running, nothing safe to drain".  This
+   // is exactly the window the opening ping-pong race hit: the
+   // consumer's half-compare pointed DMA to the opposite half,
+   // drained zeros, advanced rd_pos past the real data that then
+   // landed, and everything after looked empty.
+   if (addr < buf_lo || addr >= buf_end)
+      return 0;
+   uint32_t byte_off = addr - buf_lo;
    uint32_t dma_half = (byte_off >= (hw * BYTES_PER_WORD)) ? 1U : 0U;
    if (cpu_half == dma_half) {
       // DMA still writing the half the consumer wants to read.
@@ -702,6 +725,15 @@ int main(void)
    diag_puts("\r\nqspi shell starting\r\n");
 
    spi_base = REG_SPI0_BASE + ((uint32_t)SPI_PORT * SPI_STRIDE);
+   // Pre-warm the QUAD -> SINGLE transition once at boot.  A cold
+   // SINGLE-only boot leaves the slave's quad-lane receive path
+   // in a state where the very first QUAD reconfigure drops every
+   // byte of the first burst (register state ends up bit-identical
+   // to a later successful QUAD reconfigure, so the asymmetry is
+   // in hidden hardware state).  Cycling SINGLE -> QUAD -> SINGLE
+   // here once gives the shell's first user-initiated `m4\r` the
+   // same "has QUAD been tried before" state as a repeated mode
+   // switch, and that path works.
    spi_reconfigure(SPI_MIO_SINGLE, false, 0);
 
    diag_puts("ready. type `help` for commands.\r\n");

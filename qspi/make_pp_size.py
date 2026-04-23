@@ -48,8 +48,13 @@ def build(n_halves, name):
     buf = bytearray()
     buf += q.header(clk_div=q.CLK_DIV_8, mode=q.MODE_QUAD, flags=0)
     buf += q.uart_tx(b"m4\r");  buf += q.delay_us(50000)
-    # Startup-race filler: print_help takes ~20 ms over UART.
-    buf += q.uart_tx(b"?\r");   buf += q.delay_us(200000)
+    # Script-level m4 -> rs -> m4 workaround for the lane-switch
+    # startup race.  Driving straight into QUAD from boot drops
+    # the opening burst; bouncing through SINGLE once primes the
+    # hardware so the retry QUAD captures every byte.  Root cause
+    # invisible in MMR state, see qspi_pp_startup_race memory.
+    buf += q.uart_tx(b"rs\r");  buf += q.delay_us(50000)
+    buf += q.uart_tx(b"m4\r");  buf += q.delay_us(50000)
     for c in chunks:
         buf += q.mixed_xfer(b"", ZP + c, 0)
     buf += q.delay_us(100000)

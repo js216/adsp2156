@@ -164,6 +164,37 @@ void spi_init(enum spi_id id, const struct spi_cfg *cfg)
    }
 }
 
+// Bounded-wait quiescence + disable.  The slave path is the
+// caller we care about: after a reconfigure request arrives over
+// UART the external master is (almost certainly) already idle,
+// so SPIF is set and the loop exits in zero iterations.  A stuck
+// peripheral is bounded at roughly a millisecond of busy-wait.
+#define SPI_QUIESCE_LIMIT 100000U
+
+void spi_disable(enum spi_id id)
+{
+   uint32_t base = SPI_BASE(id);
+   // Already off -- nothing to do.  (spi_init is called before
+   // the CTL register is known-good on the first boot call.)
+   if ((MMR(base + OFF_SPI_CTL) & BIT_SPI_CTL_EN) == 0U) {
+      MMR(base + OFF_SPI_CTL)  = 0U;
+      MMR(base + OFF_SPI_STAT) = MMR(base + OFF_SPI_STAT);
+      return;
+   }
+   // Wait for the module to finish any in-flight word.  SPIF = 1
+   // means "no transfer currently active" (HRM 15-71).  RFE check
+   // catches the narrow window where SPIF has set but one last
+   // word is still queued in the receive FIFO.
+   for (uint32_t i = 0; i < SPI_QUIESCE_LIMIT; i++) {
+      uint32_t s = MMR(base + OFF_SPI_STAT);
+      if ((s & BIT_SPI_STAT_SPIF) && (s & BIT_SPI_STAT_RFE))
+         break;
+   }
+   MMR(base + OFF_SPI_CTL) = 0U;
+   // Clear all W1C status latches so spi_init starts clean.
+   MMR(base + OFF_SPI_STAT) = MMR(base + OFF_SPI_STAT);
+}
+
 void spi_tx_enable(enum spi_id id)
 {
    SPIREG(id, OFF_SPI_TXCTL) |= BIT_SPI_TXCTL_TEN;
