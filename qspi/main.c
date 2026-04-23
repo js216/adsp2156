@@ -857,19 +857,19 @@ static void handle_command(const char *line)
          // Clear PA0 GPIO direction bit so the FER=1 peripheral
          // path is unambiguously in charge of PA0 output driver.
          MMR(REG_PORTA_DIR_CLR) = 1U << 0U;
-         // HRM 12-126: PADS_PORTA0_DS field per pin (3 bits).  Reset
-         // value 0x00249249 sets DS=001 for every PA pin (valid for
-         // op freq <= 62.5 MHz).  Our SCLK0 = 93.75 MHz, and the
-         // HRM explicitly says for >62.5 MHz the valid DS is 010.
-         // Bump PA0 (bits 2:0) to 010 in case low-DS pad is the
-         // reason slave TX MISO output doesn't actually drive.
-#define REG_PADS0_PORTA0_DS 0x3100440CU
-#define PADS_DS_PA0_MASK    0x7U
-#define PADS_DS_HIGH_FREQ   0x2U
+         // HRM 12-126: PADS_PORTA0_DS packs 3 bits per PA pin.
+         // Reset = 0x00249249 = DS=001 for every pin (valid for
+         // SCLK0 <= 62.5 MHz only); our SCLK0 = 93.75 MHz needs
+         // DS=010.  Bump DS=010 for the SPI2 data lanes PA0..PA3
+         // so the output pad drive strength matches the system-
+         // clock frequency the SPI shifter runs on.
+#define REG_PADS0_PORTA0_DS      0x3100440CU
+#define PADS_DS_SPI2_DATA_MASK   0xFFFU /* PA0..PA3, 3 bits each */
+#define PADS_DS_SPI2_DATA_HIFREQ 0x492U /* 0b010_010_010_010 */
          {
             uint32_t ds = MMR(REG_PADS0_PORTA0_DS);
-            ds &= ~PADS_DS_PA0_MASK;
-            ds |= PADS_DS_HIGH_FREQ;
+            ds &= ~(uint32_t)PADS_DS_SPI2_DATA_MASK;
+            ds |= (uint32_t)PADS_DS_SPI2_DATA_HIFREQ;
             MMR(REG_PADS0_PORTA0_DS) = ds;
          }
          // Re-assert EMISO + CTL slave single.
