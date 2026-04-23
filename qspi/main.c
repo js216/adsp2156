@@ -838,10 +838,10 @@ static void handle_command(const char *line)
          // into TFIFO a few times, enable TEN, report state.
          // Polled-TX bring-up pattern.  Four fixed words direct-
          // written to TFIFO; DSP shifts them out MISO on next CS.
-#define DIAG_TFIFO_W0 0xAA55AA55U
-#define DIAG_TFIFO_W1 0xDEADBEEFU
-#define DIAG_TFIFO_W2 0xCAFEBABEU
-#define DIAG_TFIFO_W3 0x12345678U
+#define DIAG_TFIFO_W0 0x00000000U
+#define DIAG_TFIFO_W1 0x00000000U
+#define DIAG_TFIFO_W2 0x00000000U
+#define DIAG_TFIFO_W3 0x00000000U
          // Fill TFIFO first (shifter loads from TFIFO on the first
          // active SPI_CLK edge after SS), then enable TEN.  Keep
          // CTL.EN set throughout so SS edge detection stays live.
@@ -872,6 +872,12 @@ static void handle_command(const char *line)
             ds |= (uint32_t)PADS_DS_SPI2_DATA_HIFREQ;
             MMR(REG_PADS0_PORTA0_DS) = ds;
          }
+         // Clear any stale ILAT bits + STAT W1Cs.  If any prior
+         // error latched (ROR during boot RX, etc), it might gate
+         // the TX output path.
+#define SPI_ILAT_CLR_ALL 0xFFFFFFFFU
+         MMR(spi_base + OFF_SPI_ILAT_CLR) = SPI_ILAT_CLR_ALL;
+         MMR(spi_base + OFF_SPI_STAT)     = MMR(spi_base + OFF_SPI_STAT);
          // Re-assert EMISO + CTL slave single.
          MMR(spi_base + OFF_SPI_CTL) = BIT_SPI_CTL_EN | BIT_SPI_CTL_CPHA |
                                        BIT_SPI_CTL_EMISO | SPI_SIZE_32;
