@@ -848,12 +848,47 @@ static void handle_command(const char *line)
          // DIAG: skip spi_reconfigure_tx entirely.  Leave current
          // (slave RX) state, just set TEN and fill TFIFO.  If slave
          // shifts MISO now, the reconfigure was breaking SS detect.
-         // Also explicitly re-assert CTL.EMISO in case something
-         // between boot and now cleared it.  Re-write the whole
-         // slave single CTL value.
+         // Even in slave RX the MISO pad reads back 0xFF on the
+         // master side despite EMISO=1 + FER[PA0]=1.  Force the
+         // GPIO-level direction bit too -- HRM is ambiguous about
+         // whether PORT_DIR_SET is needed when FER=1, so try both.
+#define REG_PORTA_DIR_SET 0x3100401CU
+#define REG_PORTA_DIR_CLR 0x31004020U
+         // Clear PA0 GPIO direction bit so the FER=1 peripheral
+         // path is unambiguously in charge of PA0 output driver.
+         MMR(REG_PORTA_DIR_CLR) = 1U << 0U;
+         // HRM 12-126: PADS_PORTA0_DS field per pin (3 bits).  Reset
+         // value 0x00249249 sets DS=001 for every PA pin (valid for
+         // op freq <= 62.5 MHz).  Our SCLK0 = 93.75 MHz, and the
+         // HRM explicitly says for >62.5 MHz the valid DS is 010.
+         // Bump PA0 (bits 2:0) to 010 in case low-DS pad is the
+         // reason slave TX MISO output doesn't actually drive.
+#define REG_PADS0_PORTA0_DS 0x3100440CU
+#define PADS_DS_PA0_MASK    0x7U
+#define PADS_DS_HIGH_FREQ   0x2U
+         {
+            uint32_t ds = MMR(REG_PADS0_PORTA0_DS);
+            ds &= ~PADS_DS_PA0_MASK;
+            ds |= PADS_DS_HIGH_FREQ;
+            MMR(REG_PADS0_PORTA0_DS) = ds;
+         }
+         // Re-assert EMISO + CTL slave single.
          MMR(spi_base + OFF_SPI_CTL) = BIT_SPI_CTL_EN | BIT_SPI_CTL_CPHA |
                                        BIT_SPI_CTL_EMISO | SPI_SIZE_32;
-         MMR(spi_base + OFF_SPI_TXCTL) = BIT_SPI_TXCTL_TEN;
+         // DIAG extra dump to verify PORT state.
+#define REG_PORTA_DIR 0x31004018U
+         diag_puts("diag porta_dir=0x");
+         diag_hex32(MMR(REG_PORTA_DIR));
+         diag_puts(" porta_fer=0x");
+         diag_hex32(MMR(REG_PORTA_FER));
+         diag_puts(" porta_data=0x");
+         diag_hex32(MMR(REG_PORTA_DATA));
+         diag_puts("\r\n");
+         // ADI adi_spi_2156x.c slave TX: TXCTL = TDR=5 (request on
+         // empty TFIFO) | TDU (send zeros on underrun) | TEN.
+#define SPI_TXCTL_ADI_SLAVE_TX                                                 \
+   ((5U << POS_SPI_TXCTL_TDR) | BIT_SPI_TXCTL_TDU | BIT_SPI_TXCTL_TEN)
+         MMR(spi_base + OFF_SPI_TXCTL) = SPI_TXCTL_ADI_SLAVE_TX;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W2;
@@ -864,6 +899,32 @@ static void handle_command(const char *line)
          diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
          diag_puts(" stat=0x");
          diag_hex32(MMR(spi_base + OFF_SPI_STAT));
+         diag_puts("\r\n");
+         break;
+      }
+      case 'g': {
+         // GPIO diag: take PA0 away from SPI2, drive it HIGH via
+         // PORT direct-GPIO, confirm readback, then invite the host
+         // to probe MISO on the FT4222 side.  If FT4222 still reads
+         // 0xFF on MISO, the trace between DSP-PA0 and FT4222 MISO
+         // isn't wired -- which would explain why slave TX can't
+         // surface data to the master regardless of SPI config.
+#define REG_PORTA_FER_CLR  0x31004008U
+#define REG_PORTA_DATA_SET 0x31004010U
+#define REG_PORTA_DATA_CLR 0x31004014U
+         MMR(REG_PORTA_FER_CLR) = 1U << 0U; // FER[PA0]=0 -> GPIO
+         MMR(REG_PORTA_DIR_SET) = 1U << 0U; // output
+         // Argument selects LOW vs HIGH: 'g0' = low, 'g1' or 'g' = high.
+         if (line[1] == '0')
+            MMR(REG_PORTA_DATA_CLR) = 1U << 0U;
+         else
+            MMR(REG_PORTA_DATA_SET) = 1U << 0U;
+         diag_puts("gpio PA0 data=0x");
+         diag_hex32(MMR(REG_PORTA_DATA));
+         diag_puts(" dir=0x");
+         diag_hex32(MMR(REG_PORTA_DIR));
+         diag_puts(" fer=0x");
+         diag_hex32(MMR(REG_PORTA_FER));
          diag_puts("\r\n");
          break;
       }
