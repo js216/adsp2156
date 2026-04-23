@@ -48,16 +48,16 @@ def build(n_halves, name):
     buf = bytearray()
     buf += q.header(clk_div=q.CLK_DIV_8, mode=q.MODE_QUAD, flags=0)
     buf += q.uart_tx(b"m4\r");  buf += q.delay_us(50000)
-    # Startup-race filler: print_help prints ~30 ms of text + 200 ms
-    # delay covers the rest.  Without this prime the opening bytes
-    # of the first burst are lost.  Root cause invisible in MMR
-    # state -- see qspi_pp_startup_race memory.
+    # Startup-race filler.
     buf += q.uart_tx(b"?\r");   buf += q.delay_us(200000)
+    buf += q.mark("bursts_start")
     for c in chunks:
         buf += q.mixed_xfer(b"", ZP + c, 0)
+    buf += q.mark("bursts_end")
     buf += q.delay_us(100000)
     buf += q.uart_tx(b"i\r")
-    buf += q.delay_us(100000)
+    # Exit runtime hold as soon as DSP emits the cksum summary.
+    buf += q.wait_uart(b"sum=0x", 10000)
 
     with open(f"{name}.qspi", "wb") as f:
         f.write(buf)

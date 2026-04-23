@@ -559,6 +559,26 @@ static void drain_consume_into_cksum(void)
             dma_rd_pos = 0;
       }
    }
+   // Tail drain: pick up any words DMA has written into the current
+   // half that haven't crossed the half boundary yet.  Needed for
+   // short-payload tests (e.g. first-byte scans) where each CS frame
+   // is much smaller than a 256 KiB half so no IRQDONE ever fires.
+   // Safe only when DMA is not about to lap CPU -- the short-frame
+   // use-case has DMA idle between frames, so no race.
+   uint32_t addr    = dma_addr_cur(SPI_RX_DMA);
+   uint32_t buf_lo  = (uint32_t)(dma_rx_buf);
+   uint32_t buf_end = buf_lo + (dma_active_words * BYTES_PER_WORD);
+   if (addr >= buf_lo && addr < buf_end) {
+      // >>2 matches /BYTES_PER_WORD; avoids a libc-less __divrem_u32.
+      uint32_t dma_pos_words = (addr - buf_lo) >> 2U;
+      while (dma_rd_pos != dma_pos_words) {
+         cksum_xor ^= dma_rx_buf[dma_rd_pos];
+         cksum_count++;
+         dma_rd_pos++;
+         if (dma_rd_pos == dma_active_words)
+            dma_rd_pos = 0;
+      }
+   }
 }
 
 // i: drain pending ring contents into the checksum, print the
