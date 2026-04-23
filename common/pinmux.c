@@ -82,6 +82,14 @@ void pinmux_twi2(void)
 
 void pinmux_spi2(int is_master, unsigned miom)
 {
+   pinmux_spi2_dir(is_master, miom, 0);
+}
+
+// Extended: is_tx selects slave-TX direction (data lanes become
+// outputs driven by the SPI shifter).  Ignored in master role
+// since the master always drives its TX lanes.
+void pinmux_spi2_dir(int is_master, unsigned miom, int is_tx)
+{
    uint32_t mux = MMR(REG_PORTA_MUX);
    mux &= ~PA_SPI2_MUX_MASK;
    mux |= PA_SPI2_MUX_VAL;
@@ -119,6 +127,18 @@ void pinmux_spi2(int is_master, unsigned miom)
    fer &= ~PA_SPI2_FER_MASK;
    if (is_master) {
       fer |= PA_SPI2_FER_MASK;
+   } else if (is_tx) {
+      // Slave transmit: data lanes become DSP outputs.
+      //   Single: PA0 (MISO) out.
+      //   Dual:   PA0 (D1) + PA1 (D0) out.
+      //   Quad:   PA0..PA3 (D1/D0/D2/D3) all out.
+      // CLK (PA4) and SS (PA5) stay inputs (slave role).
+      if (miom == PINMUX_MIOM_SINGLE)
+         fer |= (1U << 0U);
+      else if (miom == PINMUX_MIOM_DUAL)
+         fer |= (1U << 0U) | (1U << 1U);
+      else
+         fer |= (1U << 0U) | (1U << 1U) | (1U << 2U) | (1U << 3U);
    } else if (miom == PINMUX_MIOM_SINGLE) {
       fer |= (1U << 0U); // PA0 (MISO) output only
    } else {

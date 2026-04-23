@@ -219,3 +219,16 @@ void spi_rx_dma_enable(enum spi_id id)
    v                         = (v & ~SPI_RXCTL_RDR_M) | SPI_RXCTL_RDR_NE;
    MMR(base + OFF_SPI_RXCTL) = v;
 }
+
+// TDR = 1: the SPI peripheral asserts a DMA request whenever its
+// TX FIFO is not full.  Mirrors RDR behaviour for the receive path.
+#define SPI_TXCTL_TDR_NF (1U << POS_SPI_TXCTL_TDR)
+#define SPI_TXCTL_TDR_M  (7U << POS_SPI_TXCTL_TDR)
+
+void spi_tx_dma_enable(enum spi_id id)
+{
+   uint32_t base             = SPI_BASE(id);
+   uint32_t v                = MMR(base + OFF_SPI_TXCTL);
+   v                         = (v & ~SPI_TXCTL_TDR_M) | SPI_TXCTL_TDR_NF;
+   MMR(base + OFF_SPI_TXCTL) = v;
+}

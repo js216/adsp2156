@@ -49,6 +49,7 @@
 
 #define SPI_PORT       SPI_ID_2
 #define SPI_RX_DMA     DMA_CH_SPI2_RX
+#define SPI_TX_DMA     DMA_CH_SPI2_TX
 #define SPI_STRIDE     0x1000U
 #define STARTUP_MS     500U
 #define BYTES_PER_WORD 4U
@@ -80,6 +81,42 @@ static uint32_t dma_rx_buf[DMA_BUF_WORDS];
 // the L1_SYS_OFFSET translation and only for the L1_INT window.
 #pragma section("seg_l2_bss", NO_INIT)
 static struct dma_dscl dma_desc[2];
+
+// TX DMA buffer for slave-mode outbound streaming.  256 KiB fits
+// alongside the 512 KiB RX ring in L2 with margin for the rest of
+// seg_l2_bss.  Longer TX tests use DMA FLOW=AUTO on this buffer
+// so the pattern repeats forever; a one-shot (FLOW=STOP) variant
+// sends exactly ``n`` words then stops.
+#define DMA_TX_WORDS (256U * 1024U / BYTES_PER_WORD)
+#pragma section("seg_l2_bss", NO_INIT)
+static uint32_t dma_tx_buf[DMA_TX_WORDS];
+
+// Host-compatible 32-bit xorshift PRBS.  Matches
+// make_qspi.prbs_xorshift32 / QspiTest._prbs byte-for-byte: each
+// call updates state then emits the low 8 bits as the next byte.
+// Used by the TX path to generate streams the poller can verify
+// via q.read_verify_prbs.  Seed must be non-zero.
+static uint32_t prbs_state;
+
+static void prbs_init(uint32_t seed)
+{
+   prbs_state = (seed == 0U) ? 1U : seed;
+}
+
+// xorshift32 tap positions, matching the host generator.
+#define PRBS_TAP_A 13U
+#define PRBS_TAP_B 17U
+#define PRBS_TAP_C 5U
+
+static uint8_t prbs_next_byte(void)
+{
+   uint32_t x = prbs_state;
+   x ^= (uint32_t)(x << PRBS_TAP_A);
+   x ^= (uint32_t)(x >> PRBS_TAP_B);
+   x ^= (uint32_t)(x << PRBS_TAP_C);
+   prbs_state = x;
+   return (uint8_t)(x & BYTE_MASK);
+}
 
 // ---------- diag_* : non-variadic output helpers ----------
 // printf() on cc21k mis-handles single-arg variadic slots (observed
@@ -130,6 +167,12 @@ static uint32_t cksum_count = 0;
 // ready to consume.
 static bool dma_armed      = false;
 static uint32_t dma_rd_pos = 0;
+// TX (slave transmit) DMA state.  tx_armed tracks whether the
+// SPI2 TX peripheral DMA channel is currently running.  Separate
+// from dma_armed (which is RX) -- they're never both active in
+// the slave-only demo because pinmux/FER direction must flip and
+// the SPI peripheral only drives one direction at a time.
+static bool tx_armed = false;
 // Auto-consume: when true, the shell's idle-wait loop continuously
 // samples the DMA ring and folds new words into the running
 // checksum.  This keeps up with DMA on bursts larger than the ring
@@ -142,6 +185,7 @@ static bool auto_consume = true;
 static void drain_disarm(void);
 static void drain_arm(void);
 static uint32_t drain_poll_new_words(void);
+static void tx_disarm(void);
 
 static const char *miom_name(enum spi_miom m)
 {
@@ -175,6 +219,7 @@ static void spi_reconfigure(enum spi_miom miom)
        .lsb_first = 0,
    };
    drain_disarm();
+   tx_disarm();
    // HRM 15-12: "Changing to quad SPI mode must be done when the
    // SPI is in a quiescent state."  spi_disable polls SPIF + RFE
    // and then clears CTL.EN before pinmux_spi2 toggles FER bits;
@@ -190,6 +235,54 @@ static void spi_reconfigure(enum spi_miom miom)
    // can hit the 2-deep RFIFO.
    drain_arm();
    spi_rx_enable(SPI_PORT);
+}
+
+// Switch SPI2 into slave-transmit direction at the current
+// lane width.  Pin FER flips so the data lanes become DSP
+// outputs (single: PA0; dual: PA0..PA1; quad: PA0..PA3); RX DMA
+// is disarmed; TX peripheral DMA line is enabled.  Caller must
+// have pre-filled dma_tx_buf and then call tx_arm(n_words) to
+// start transmission.
+static void spi_reconfigure_tx(enum spi_miom miom)
+{
+   struct spi_cfg cfg = {
+       .clkdiv    = 0,
+       .size      = SPI_WORD_32,
+       .miom      = miom,
+       .is_master = 0U,
+       .cpol      = 0,
+       .cpha      = 1U,
+       .lsb_first = 0,
+   };
+   drain_disarm();
+   tx_disarm();
+   spi_disable(SPI_PORT);
+   pinmux_spi2_dir(0, (unsigned)miom, 1);
+   spi_init(SPI_PORT, &cfg);
+   spi_tx_dma_enable(SPI_PORT);
+   current_miom = miom;
+}
+
+// One-shot TX arm: configure the SPI2 TX DMA channel (FLOW=STOP)
+// to stream n_words from dma_tx_buf into the peripheral's TFIFO,
+// then enable the SPI TX channel (TEN=1).  DMA starts pre-filling
+// TFIFO immediately; the master's first clock edge shifts the
+// top byte of the first pre-loaded word out on the data lanes.
+static void tx_arm(uint32_t n_words)
+{
+   dma_oneshot_config(SPI_TX_DMA, (struct dma_buf){dma_tx_buf, n_words},
+                      DMA_DIR_TX_FROM_MEM);
+   dma_enable(SPI_TX_DMA);
+   tx_armed = true;
+   spi_tx_enable(SPI_PORT);
+}
+
+static void tx_disarm(void)
+{
+   if (tx_armed) {
+      dma_disable(SPI_TX_DMA);
+      tx_armed = false;
+   }
 }
 
 static void spi_rx_flush(void)
@@ -612,6 +705,66 @@ static void cmd_info(const char *rest)
    cksum_count = 0;
 }
 
+// p <seed> <bytes>: stage a PRBS stream in dma_tx_buf and start
+// slave TX DMA.  The host poller's q.read(n) / q.read_verify_prbs
+// can then pull the bytes via MISO (single), D0..D1 (dual), or
+// D0..D3 (quad).  <bytes> must be a multiple of 4 and no larger
+// than the TX buffer (DMA_TX_WORDS * BYTES_PER_WORD).  FLOW=STOP,
+// so TX stops after exactly <bytes> bytes -- the master can clock
+// more, but the slave shifter will underrun on subsequent words
+// (TUR latches) and pin state is undefined after that.
+static void cmd_prbs_tx(const char *rest)
+{
+   uint32_t seed  = 0;
+   uint32_t bytes = 0;
+   rest           = parse_u32(rest, &seed);
+   (void)parse_u32(rest, &bytes);
+   if (bytes == 0U || (bytes & (BYTES_PER_WORD - 1U)) != 0U) {
+      diag_puts("ERR bytes must be >0 and a multiple of 4\r\n");
+      return;
+   }
+   if ((bytes >> 2U) > DMA_TX_WORDS) {
+      diag_puts("ERR bytes exceeds tx buffer (1 MiB max by default)\r\n");
+      return;
+   }
+   uint32_t n_words = bytes >> 2U;
+
+   // Fill dma_tx_buf with PRBS bytes, packed big-endian into 32-bit
+   // words so byte 0 lands in the MSB of word 0.  SPI slave shifter
+   // is MSB-first (LSBF=0), so the first bit on the wire is bit 7
+   // of byte 0 == PRBS byte 0 bit 7, matching the host generator.
+   prbs_init(seed);
+   for (uint32_t w = 0; w < n_words; w++) {
+      uint32_t b0   = (uint32_t)prbs_next_byte();
+      uint32_t b1   = (uint32_t)prbs_next_byte();
+      uint32_t b2   = (uint32_t)prbs_next_byte();
+      uint32_t b3   = (uint32_t)prbs_next_byte();
+      dma_tx_buf[w] = (b0 << (3U * BITS_PER_BYTE)) |
+                      (b1 << (2U * BITS_PER_BYTE)) | (b2 << BITS_PER_BYTE) | b3;
+   }
+
+   spi_reconfigure_tx(current_miom);
+   tx_arm(n_words);
+
+   diag_puts("tx ready seed=0x");
+   diag_hex32(seed);
+   diag_puts(" bytes=0x");
+   diag_hex32(bytes);
+   diag_puts(" mode=");
+   diag_puts(miom_name(current_miom));
+   diag_puts(" ctl=0x");
+   diag_hex32(MMR(spi_base + OFF_SPI_CTL));
+   diag_puts(" txc=0x");
+   diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
+   diag_puts(" fer=0x");
+   diag_hex32(MMR(REG_PORTA_FER));
+   diag_puts(" dma_stat=0x");
+   diag_hex32(dma_stat_raw(SPI_TX_DMA));
+   diag_puts(" xcnt=0x");
+   diag_hex32(dma_xcnt_cur(SPI_TX_DMA));
+   diag_puts("\r\n");
+}
+
 static void cmd_hex_dump(const char *rest)
 {
    rest           = skip_ws(rest);
@@ -641,6 +794,8 @@ static void print_help(void)
              "  h                stream received words forever,\r\n"
              "                   stop with any key\r\n"
              "  h <n>            dump exactly <n> bytes (multiple of 4)\r\n"
+             "  p <seed> <n>     slave TX: stage PRBS(seed) of <n>\r\n"
+             "                   bytes and start DMA transmit (FLOW=STOP)\r\n"
              "editing: backspace deletes, up-arrow recalls last line.\r\n");
    diag_puts("state: mode=");
    diag_puts(miom_name(current_miom));
@@ -676,6 +831,50 @@ static void handle_command(const char *line)
       case 'a': cmd_auto(line + 1); break;
       case 'i': cmd_info(line + 1); break;
       case 'h': cmd_hex_dump(line + 1); break;
+      case 'p': cmd_prbs_tx(line + 1); break;
+      case 'q': {
+         // DIAG: polled-TX bring-up.  No DMA, no PRBS.  Switch to
+         // slave TX at current lane width, shove one fixed pattern
+         // into TFIFO a few times, enable TEN, report state.
+         // Polled-TX bring-up pattern.  Four fixed words direct-
+         // written to TFIFO; DSP shifts them out MISO on next CS.
+#define DIAG_TFIFO_W0 0xAA55AA55U
+#define DIAG_TFIFO_W1 0xDEADBEEFU
+#define DIAG_TFIFO_W2 0xCAFEBABEU
+#define DIAG_TFIFO_W3 0x12345678U
+         spi_reconfigure_tx(current_miom);
+         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
+         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
+         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W2;
+         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W3;
+         MMR(spi_base + OFF_SPI_TXCTL) |= BIT_SPI_TXCTL_TEN;
+         // Also enable RX channel -- on some SPI2 variants the TX
+         // shift register only gates the SPI_CLK domain when at
+         // least one channel (RX or TX) is "initiating" or actively
+         // accepting data.
+         MMR(spi_base + OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
+         diag_puts("polled tx loaded ctl=0x");
+         diag_hex32(MMR(spi_base + OFF_SPI_CTL));
+         diag_puts(" txc=0x");
+         diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
+         diag_puts(" stat=0x");
+         diag_hex32(MMR(spi_base + OFF_SPI_STAT));
+         diag_puts("\r\n");
+         break;
+      }
+      case 'x':
+         diag_puts("tx_stat spi_stat=0x");
+         diag_hex32(MMR(spi_base + OFF_SPI_STAT));
+         diag_puts(" txc=0x");
+         diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
+         diag_puts(" dma_stat=0x");
+         diag_hex32(dma_stat_raw(SPI_TX_DMA));
+         diag_puts(" xcnt=0x");
+         diag_hex32(dma_xcnt_cur(SPI_TX_DMA));
+         diag_puts(" addr=0x");
+         diag_hex32(dma_addr_cur(SPI_TX_DMA));
+         diag_puts("\r\n");
+         break;
       default:
          diag_puts("ERR unknown cmd\r\n");
          print_help();

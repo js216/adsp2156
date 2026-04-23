@@ -40,4 +40,10 @@ void pinmux_twi2(void);
 // drives CLK/SEL1/MOSI (and D1..D3 when in dual/quad master).
 void pinmux_spi2(int is_master, unsigned miom);
 
+// Extended form.  ``is_tx`` selects the slave direction: 0 (slave
+// RX) leaves data lanes as inputs in dual/quad; non-zero (slave
+// TX) configures them as outputs driven by the SPI shifter.
+// Ignored in master role since master always drives its own lanes.
+void pinmux_spi2_dir(int is_master, unsigned miom, int is_tx);
+
 #endif // PINMUX_H

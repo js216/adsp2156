@@ -71,4 +71,11 @@ void spi_disable(enum spi_id id);
 // spi_rx_enable if DMA is to be used.
 void spi_rx_dma_enable(enum spi_id id);
 
+// Mirror for TX: asserts a DMA request whenever SPI_TFIFO is not
+// full so the DMA channel (SPI0/1/2_TX = 22/24/26) can keep it
+// topped up without core intervention.  Call before spi_tx_enable
+// when using DMA-fed slave transmit.
+//   id: which SPI controller.
+void spi_tx_dma_enable(enum spi_id id);
+
 #endif // SPI_H
