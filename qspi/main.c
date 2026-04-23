@@ -2,17 +2,16 @@
 // main.c --- SPI2 interactive hex-dump shell
 // Copyright (c) 2026 Jakob Kastelic
 
-// UART0 is a tiny interactive shell that configures SPI2 and drains
-// receive data as raw hex.  No PRBS, no loopback.  Intended for
-// bring-up: point FT4222 at SPI2, open a terminal on UART0, type
-// commands, watch words.
+// UART0 is a tiny interactive shell that configures SPI2 as a slave
+// and drains receive data as raw hex.  No PRBS, no loopback, no
+// master mode.  Intended for bring-up: point FT4222 (master) at
+// SPI2, open a terminal on UART0, type commands, watch words.
 //
 // Commands (see `help` for the live list):
 //   help | ?           print command list + current state
-//   rs                 role slave (default)
-//   rm <clkdiv>        role master at SCLK0 / (clkdiv + 1)
 //   m1 | m2 | m4       lane width: 1 (default), 2, 4
 //   b <bytes>          DMA buffer size
+//   a 0 | a 1          auto-consume off/on (default on)
 //   i                  drain buffer, print level + running checksum,
 //                      reset checksum
 //   h                  stream received words forever; any UART byte
@@ -110,8 +109,6 @@ static void diag_hex32(uint32_t v)
 // ---------- SPI config state ----------
 static uint32_t spi_base;
 static enum spi_miom current_miom = SPI_MIO_SINGLE;
-static bool current_master        = false;
-static uint32_t current_clkdiv    = 0;
 // Active DMA ring size in 32-bit words.  Capped by the static
 // dma_rx_buf[] allocation (DMA_BUF_WORDS).  b command adjusts it.
 // dma_half_words = dma_active_words >> 1 is the per-descriptor XCNT
@@ -164,44 +161,34 @@ static const char *miom_name(enum spi_miom m)
    return s_qq;
 }
 
-static void spi_reconfigure(enum spi_miom miom, bool master, uint32_t clkdiv)
+static void spi_reconfigure(enum spi_miom miom)
 {
-   // Board convention: CPOL=0, CPHA=1.  Matches pyft4222
-   // Cpha.CLK_TRAILING (what flags=0 selects in poller.py).
+   // Slave-only demo.  CPOL=0, CPHA=1 matches pyft4222
+   // Cpha.CLK_TRAILING (flags=0 in poller.py).
    struct spi_cfg cfg = {
-       .clkdiv    = clkdiv,
+       .clkdiv    = 0,
        .size      = SPI_WORD_32,
        .miom      = miom,
-       .is_master = master ? 1U : 0U,
+       .is_master = 0U,
        .cpol      = 0,
        .cpha      = 1U,
        .lsb_first = 0,
    };
    drain_disarm();
    // HRM 15-12: "Changing to quad SPI mode must be done when the
-   // SPI is in a quiescent state."  spi_disable blocks until
-   // SPIF=1 (no active transfer) and RFE=1 (RX FIFO drained), then
-   // clears CTL.EN.  Must happen before pinmux_spi2 toggles FER
-   // bits -- changing pin function while the SPI shifter is active
-   // drops the opening bytes of the first transfer in the new
-   // mode, which was the observed startup race.
+   // SPI is in a quiescent state."  spi_disable polls SPIF + RFE
+   // and then clears CTL.EN before pinmux_spi2 toggles FER bits;
+   // changing pin function while the SPI shifter is active drops
+   // the opening bytes of the first transfer in the new mode.
    spi_disable(SPI_PORT);
-   pinmux_spi2(master ? 1 : 0, (unsigned)miom);
+   pinmux_spi2(0, (unsigned)miom);
    spi_init(SPI_PORT, &cfg);
-   if (!master)
-      spi_rx_dma_enable(SPI_PORT);
-   current_miom   = miom;
-   current_master = master;
-   current_clkdiv = clkdiv;
+   spi_rx_dma_enable(SPI_PORT);
+   current_miom = miom;
    // Arm DMA before enabling the SPI RX channel so the DDE is
    // already in data-transfer state by the time the first word
-   // can hit the 2-deep RFIFO.  Reversing this order leaves a
-   // window where RFIFO can overrun (ROR latched, channel wedged)
-   // if the external master sends immediately after it observes
-   // our UART ack of the mode command.
+   // can hit the 2-deep RFIFO.
    drain_arm();
-   if (master)
-      spi_tx_enable(SPI_PORT);
    spi_rx_enable(SPI_PORT);
 }
 
@@ -225,14 +212,9 @@ static void drain_disarm(void)
 
 // Arm the DMA ring for slave RX.  Safe to call repeatedly: reinit
 // is idempotent.  After this, data lands in dma_rx_buf continuously
-// until the next drain_disarm / reconfigure.  Master role has no
-// RX to arm -- silently disarms instead.
+// until the next drain_disarm / reconfigure.
 static void drain_arm(void)
 {
-   if (current_master) {
-      drain_disarm();
-      return;
-   }
    if (dma_armed)
       return;
    spi_rx_flush();
@@ -499,27 +481,6 @@ static void op_hex_dump(uint32_t count_bytes, bool forever)
 }
 
 // ---------- Command handlers ----------
-static void cmd_role(const char *rest)
-{
-   if (rest[0] == 's') {
-      spi_reconfigure(current_miom, false, 0);
-      diag_puts("role=slave mode=");
-      diag_puts(miom_name(current_miom));
-      diag_puts("\r\n");
-   } else if (rest[0] == 'm') {
-      uint32_t clkdiv = 0;
-      (void)parse_u32(rest + 1, &clkdiv);
-      spi_reconfigure(current_miom, true, clkdiv);
-      diag_puts("role=master clkdiv=0x");
-      diag_hex32(clkdiv);
-      diag_puts(" mode=");
-      diag_puts(miom_name(current_miom));
-      diag_puts("\r\n");
-   } else {
-      diag_puts("ERR bad role (use rs or rm <clkdiv>)\r\n");
-   }
-}
-
 static void cmd_mode(const char *rest)
 {
    enum spi_miom m = SPI_MIO_SINGLE;
@@ -529,7 +490,7 @@ static void cmd_mode(const char *rest)
       case '4': m = SPI_MIO_QUAD; break;
       default: diag_puts("ERR bad mode (use m1 / m2 / m4)\r\n"); return;
    }
-   spi_reconfigure(m, current_master, current_clkdiv);
+   spi_reconfigure(m);
    diag_puts("mode=");
    diag_puts(miom_name(current_miom));
    diag_puts("\r\n");
@@ -633,10 +594,6 @@ static void cmd_info(const char *rest)
 
 static void cmd_hex_dump(const char *rest)
 {
-   if (current_master) {
-      diag_puts("ERR h is slave-only\r\n");
-      return;
-   }
    rest           = skip_ws(rest);
    uint32_t count = 0;
    bool forever   = (rest[0] == '\0');
@@ -652,12 +609,9 @@ static void cmd_hex_dump(const char *rest)
 
 static void print_help(void)
 {
-   diag_puts("commands:\r\n"
+   diag_puts("commands (slave-only):\r\n"
              "  help | ?         print this help + state\r\n"
-             "  rs               role slave (default)\r\n"
-             "  rm <clkdiv>      role master, dec or 0xhex\r\n"
              "  m1 | m2 | m4     SPI lane width (default m1)\r\n"
-             "  t 0 | t 1        drain: 0=polled, 1=DMA (default DMA)\r\n"
              "  b <bytes>        DMA buffer size, <= 524288 B\r\n"
              "  a 0 | a 1        auto-consume off/on (default on);\r\n"
              "                   on = CPU drains ring continuously so\r\n"
@@ -668,12 +622,8 @@ static void print_help(void)
              "                   stop with any key\r\n"
              "  h <n>            dump exactly <n> bytes (multiple of 4)\r\n"
              "editing: backspace deletes, up-arrow recalls last line.\r\n");
-   diag_puts("state: role=");
-   diag_puts(current_master ? "master" : "slave");
-   diag_puts(" mode=");
+   diag_puts("state: mode=");
    diag_puts(miom_name(current_miom));
-   diag_puts(" clkdiv=0x");
-   diag_hex32(current_clkdiv);
    diag_puts(" bufsize=0x");
    diag_hex32(dma_active_words * BYTES_PER_WORD);
    diag_puts("\r\n");
@@ -701,7 +651,6 @@ static void handle_command(const char *line)
    }
 
    switch (c) {
-      case 'r': cmd_role(line + 1); break;
       case 'm': cmd_mode(line + 1); break;
       case 'b': cmd_bufsize(line + 1); break;
       case 'a': cmd_auto(line + 1); break;
@@ -725,16 +674,7 @@ int main(void)
    diag_puts("\r\nqspi shell starting\r\n");
 
    spi_base = REG_SPI0_BASE + ((uint32_t)SPI_PORT * SPI_STRIDE);
-   // Pre-warm the QUAD -> SINGLE transition once at boot.  A cold
-   // SINGLE-only boot leaves the slave's quad-lane receive path
-   // in a state where the very first QUAD reconfigure drops every
-   // byte of the first burst (register state ends up bit-identical
-   // to a later successful QUAD reconfigure, so the asymmetry is
-   // in hidden hardware state).  Cycling SINGLE -> QUAD -> SINGLE
-   // here once gives the shell's first user-initiated `m4\r` the
-   // same "has QUAD been tried before" state as a repeated mode
-   // switch, and that path works.
-   spi_reconfigure(SPI_MIO_SINGLE, false, 0);
+   spi_reconfigure(SPI_MIO_SINGLE);
 
    diag_puts("ready. type `help` for commands.\r\n");
 
