@@ -842,20 +842,21 @@ static void handle_command(const char *line)
 #define DIAG_TFIFO_W1 0xDEADBEEFU
 #define DIAG_TFIFO_W2 0xCAFEBABEU
 #define DIAG_TFIFO_W3 0x12345678U
-         // HRM 15-30 slave programming order: write CTL/RXCTL/
-         // TXCTL first (with EN=0 during setup), fill TFIFO, then
-         // enable CTL.EN last.  Currently spi_reconfigure_tx leaves
-         // CTL.EN=1, so drop it before the TFIFO prime and raise
-         // again after.
-         spi_reconfigure_tx(current_miom);
-         MMR(spi_base + OFF_SPI_CTL) &= ~BIT_SPI_CTL_EN;
-         MMR(spi_base + OFF_SPI_TXCTL) |= BIT_SPI_TXCTL_TEN;
-         MMR(spi_base + OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
+         // Fill TFIFO first (shifter loads from TFIFO on the first
+         // active SPI_CLK edge after SS), then enable TEN.  Keep
+         // CTL.EN set throughout so SS edge detection stays live.
+         // DIAG: skip spi_reconfigure_tx entirely.  Leave current
+         // (slave RX) state, just set TEN and fill TFIFO.  If slave
+         // shifts MISO now, the reconfigure was breaking SS detect.
+         // HRM 15-30 step 1: program CTL/RXCTL/TXCTL before step
+         // 2's TFIFO write.  Set TEN=1 now (CTL is already fine
+         // from boot's spi_init).  Keep RXCTL at 0 so the RX path
+         // the RX DMA already owns is undisturbed.
+         MMR(spi_base + OFF_SPI_TXCTL) = BIT_SPI_TXCTL_TEN;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W2;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W3;
-         MMR(spi_base + OFF_SPI_CTL) |= BIT_SPI_CTL_EN;
          diag_puts("polled tx loaded ctl=0x");
          diag_hex32(MMR(spi_base + OFF_SPI_CTL));
          diag_puts(" txc=0x");
