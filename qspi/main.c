@@ -848,10 +848,11 @@ static void handle_command(const char *line)
          // DIAG: skip spi_reconfigure_tx entirely.  Leave current
          // (slave RX) state, just set TEN and fill TFIFO.  If slave
          // shifts MISO now, the reconfigure was breaking SS detect.
-         // HRM 15-30 step 1: program CTL/RXCTL/TXCTL before step
-         // 2's TFIFO write.  Set TEN=1 now (CTL is already fine
-         // from boot's spi_init).  Keep RXCTL at 0 so the RX path
-         // the RX DMA already owns is undisturbed.
+         // Also explicitly re-assert CTL.EMISO in case something
+         // between boot and now cleared it.  Re-write the whole
+         // slave single CTL value.
+         MMR(spi_base + OFF_SPI_CTL) = BIT_SPI_CTL_EN | BIT_SPI_CTL_CPHA |
+                                       BIT_SPI_CTL_EMISO | SPI_SIZE_32;
          MMR(spi_base + OFF_SPI_TXCTL) = BIT_SPI_TXCTL_TEN;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
