@@ -842,17 +842,20 @@ static void handle_command(const char *line)
 #define DIAG_TFIFO_W1 0xDEADBEEFU
 #define DIAG_TFIFO_W2 0xCAFEBABEU
 #define DIAG_TFIFO_W3 0x12345678U
+         // HRM 15-30 slave programming order: write CTL/RXCTL/
+         // TXCTL first (with EN=0 during setup), fill TFIFO, then
+         // enable CTL.EN last.  Currently spi_reconfigure_tx leaves
+         // CTL.EN=1, so drop it before the TFIFO prime and raise
+         // again after.
          spi_reconfigure_tx(current_miom);
+         MMR(spi_base + OFF_SPI_CTL) &= ~BIT_SPI_CTL_EN;
+         MMR(spi_base + OFF_SPI_TXCTL) |= BIT_SPI_TXCTL_TEN;
+         MMR(spi_base + OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W2;
          MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W3;
-         MMR(spi_base + OFF_SPI_TXCTL) |= BIT_SPI_TXCTL_TEN;
-         // Also enable RX channel -- on some SPI2 variants the TX
-         // shift register only gates the SPI_CLK domain when at
-         // least one channel (RX or TX) is "initiating" or actively
-         // accepting data.
-         MMR(spi_base + OFF_SPI_RXCTL) |= BIT_SPI_RXCTL_REN;
+         MMR(spi_base + OFF_SPI_CTL) |= BIT_SPI_CTL_EN;
          diag_puts("polled tx loaded ctl=0x");
          diag_hex32(MMR(spi_base + OFF_SPI_CTL));
          diag_puts(" txc=0x");
