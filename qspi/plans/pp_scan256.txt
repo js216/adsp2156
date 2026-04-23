@@ -1,0 +1,35 @@
+# First-byte hazard scan.  For each B in 0..255, send one 40-byte
+# CS frame of [B, PRBS-123[0..38]] in quad mode and ask DSP for
+# cksum.  Host-side post-processing parses sum= lines and compares
+# against running_xor of each expected frame.  64 of 256 should fail
+# with xor_diff=0x22000220 when (B & 0x11) == 0x01.
+#
+# Blobs: scan_frames.bin -- 256 * 40 = 10240 bytes, frame i at
+#                           offset i*40 is [i, PRBS123[0..38]].
+#
+# qspi_write writes the whole blob at once.  Then a separate
+# sequence of uart_write/expect pairs drains DSP per-frame cksums.
+# The shell's drain_consume_into_cksum runs per 'i' command, so
+# sum= lines correspond to cumulative state.  Easier: use one
+# blob per B and run 256 qspi_write+i pairs -- but that's 256
+# plan lines.  Compromise: put whole scan in one blob, shell's
+# cksum at end shows XOR of all frames.  For per-B breakdown run
+# via multiple --blob invocations of pp_halves.txt.
+
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="a 0\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=scan_start
+dsp:qspi_write data=@scan_frames.bin clk_div=8 mode=4
+mark tag=scan_end
+delay ms=100
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=5000
+dsp:uart_close

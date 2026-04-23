@@ -1,0 +1,97 @@
+# Throughput sweep: all three DSP lane widths (m1/m2/m4) x all
+# three FT4222 master clock divisors (DIV_8 / DIV_4 / DIV_2).
+# Each phase sends the same blob; DSP i prints per-phase cksum.
+# Marks bracket each phase so poller's timeline.log shows
+# precise wall-time per burst.
+#
+# Blobs:
+#   main.ldr  -- qspi firmware
+#   data.bin  -- payload (512 KiB recommended for quick sweep,
+#                1 MiB for headline number)
+
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+
+# m1 ----------------------------------------------------------------
+dsp:uart_write data="m1\r"
+delay ms=50
+dsp:uart_write data="a 0\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=m1_div8_start
+dsp:qspi_write data=@data.bin clk_div=8 mode=1
+mark tag=m1_div8_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m1_div4_start
+dsp:qspi_write data=@data.bin clk_div=4 mode=1
+mark tag=m1_div4_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m1_div2_start
+dsp:qspi_write data=@data.bin clk_div=2 mode=1
+mark tag=m1_div2_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+# m2 ----------------------------------------------------------------
+dsp:uart_write data="m2\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=m2_div8_start
+dsp:qspi_write data=@data.bin clk_div=8 mode=2
+mark tag=m2_div8_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m2_div4_start
+dsp:qspi_write data=@data.bin clk_div=4 mode=2
+mark tag=m2_div4_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m2_div2_start
+dsp:qspi_write data=@data.bin clk_div=2 mode=2
+mark tag=m2_div2_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+# m4 ----------------------------------------------------------------
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=m4_div8_start
+dsp:qspi_write data=@data.bin clk_div=8 mode=4
+mark tag=m4_div8_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m4_div4_start
+dsp:qspi_write data=@data.bin clk_div=4 mode=4
+mark tag=m4_div4_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+mark tag=m4_div2_start
+dsp:qspi_write data=@data.bin clk_div=2 mode=4
+mark tag=m4_div2_end
+delay ms=50
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=3000
+
+dsp:uart_close
