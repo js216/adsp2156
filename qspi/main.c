@@ -153,12 +153,50 @@ static enum spi_miom current_miom = SPI_MIO_SINGLE;
 // the -no-std-lib build can't link against libc's __divrem_u32).
 static uint32_t dma_active_words = DMA_BUF_WORDS;
 static uint32_t dma_half_words   = DMA_BUF_WORDS >> 1U;
-// Running XOR-checksum + word count accumulated since the last
-// `i` command (which prints and resets them).  No auto-reset on
-// buffer fill -- if the ring wraps faster than the host drains,
-// data is lost silently.
-static uint32_t cksum_xor   = 0;
+// Running CRC-32 (IEEE 802.3, poly 0xEDB88320 reflected, init
+// 0xFFFFFFFF, final XOR 0xFFFFFFFF -- matches zlib.crc32) + word
+// count accumulated since the last `i` command (which prints
+// and resets them).  No auto-reset on buffer fill -- if the ring
+// wraps faster than the host drains, data is lost silently.
+// CRC replaces the earlier XOR: XOR cancels paired bit flips,
+// which is the exact error class the FT4222 first-byte hazard
+// produces, so it was invisible to the old checksum.
+#define CRC32_INIT   0xFFFFFFFFU
+#define CRC32_XOROUT 0xFFFFFFFFU
+#define CRC32_POLY   0xEDB88320U
+
+static uint32_t cksum_crc   = CRC32_INIT;
 static uint32_t cksum_count = 0;
+
+// Update CRC-32 with one 32-bit word, ingested LSB-first byte
+// order (same as feeding 4 bytes to zlib.crc32 in little-endian
+// order).  To stay wire-compatible with the XOR checksum -- which
+// XORed words as assembled MSB-first by the SPI shifter -- we
+// feed bytes here in that same shifter order (MSB of the word
+// first).
+#define CRC32_BYTE3_SHIFT 24U
+#define CRC32_BYTE2_SHIFT 16U
+#define CRC32_BYTE1_SHIFT 8U
+
+static inline uint32_t crc32_update_byte(uint32_t c, uint8_t b)
+{
+   c ^= b;
+   for (unsigned i = 0; i < BITS_PER_BYTE; i++) {
+      uint32_t mask = (uint32_t)0 - (c & 1U);
+      c             = (c >> 1U) ^ (CRC32_POLY & mask);
+   }
+   return c;
+}
+
+static inline uint32_t crc32_update_word(uint32_t c, uint32_t w)
+{
+   c = crc32_update_byte(c, (uint8_t)(w >> CRC32_BYTE3_SHIFT));
+   c = crc32_update_byte(c, (uint8_t)(w >> CRC32_BYTE2_SHIFT));
+   c = crc32_update_byte(c, (uint8_t)(w >> CRC32_BYTE1_SHIFT));
+   c = crc32_update_byte(c, (uint8_t)(w));
+   return c;
+}
+
 // Always-on DMA ring bookkeeping.  Armed at boot in slave role so
 // data received before `h` is already in the ring.  Ping-pong
 // rhythm: drain_poll_new_words compares the half rd_pos is in
@@ -316,7 +354,7 @@ static void drain_arm(void)
                           dma_half_words, dma_desc);
    dma_armed   = true;
    dma_rd_pos  = 0;
-   cksum_xor   = 0;
+   cksum_crc   = CRC32_INIT;
    cksum_count = 0;
 }
 
@@ -363,11 +401,16 @@ static uint32_t drain_poll_new_words(void)
    uint32_t dma_half = (byte_off >= (hw * BYTES_PER_WORD)) ? 1U : 0U;
    if (cpu_half == dma_half) {
       // DMA still writing the half the consumer wants to read.
-      // Only safe to consume up to what DMA has written in the
-      // current half; but the consumer's position is either at the
-      // start (no IRQDONE yet for this half) or mid-drain (already
-      // saw IRQDONE and some words).  Return 0 -- nothing new is
-      // guaranteed complete.
+      // With auto_consume=on the CPU is racing DMA, so return 0
+      // and wait for the next half-cross.  With auto_consume=off
+      // the shell contract is that SPI is quiescent when the user
+      // issues `h` / `i`; no race, so expose whatever DMA has
+      // already written up to ADDR_CUR.
+      if (auto_consume)
+         return 0;
+      uint32_t dma_word = byte_off / BYTES_PER_WORD;
+      if (dma_word > dma_rd_pos)
+         return dma_word - dma_rd_pos;
       return 0;
    }
    // DMA has moved into the other half, so cpu_half is fully
@@ -563,7 +606,7 @@ static void op_hex_dump(uint32_t count_bytes, bool forever)
          diag_puts("=0x");
          diag_hex32(w);
          diag_puts("\r\n");
-         cksum_xor ^= w;
+         cksum_crc = crc32_update_word(cksum_crc, w);
          cksum_count++;
          dma_rd_pos++;
          if (dma_rd_pos == dma_active_words)
@@ -645,7 +688,7 @@ static void drain_consume_into_cksum(void)
       if (nw == 0U)
          break;
       for (uint32_t k = 0; k < nw; k++) {
-         cksum_xor ^= dma_rx_buf[dma_rd_pos];
+         cksum_crc = crc32_update_word(cksum_crc, dma_rx_buf[dma_rd_pos]);
          cksum_count++;
          dma_rd_pos++;
          if (dma_rd_pos == dma_active_words)
@@ -665,7 +708,7 @@ static void drain_consume_into_cksum(void)
       // >>2 matches /BYTES_PER_WORD; avoids a libc-less __divrem_u32.
       uint32_t dma_pos_words = (addr - buf_lo) >> 2U;
       while (dma_rd_pos != dma_pos_words) {
-         cksum_xor ^= dma_rx_buf[dma_rd_pos];
+         cksum_crc = crc32_update_word(cksum_crc, dma_rx_buf[dma_rd_pos]);
          cksum_count++;
          dma_rd_pos++;
          if (dma_rd_pos == dma_active_words)
@@ -689,7 +732,7 @@ static void cmd_info(const char *rest)
    diag_puts("/0x");
    diag_hex32(dma_active_words * BYTES_PER_WORD);
    diag_puts(" B  sum=0x");
-   diag_hex32(cksum_xor);
+   diag_hex32(cksum_crc ^ CRC32_XOROUT);
    // Raw DMA channel state for ping-pong bring-up.  dma_stat's top
    // half holds IRQERR/ERRC (non-zero = rejected config), the low
    // bits hold RUN/IRQDONE.  addr_cur/xcnt_cur let me see whether
@@ -701,7 +744,7 @@ static void cmd_info(const char *rest)
    diag_puts(" xcnt=0x");
    diag_hex32(dma_xcnt_cur(SPI_RX_DMA));
    diag_puts("\r\n");
-   cksum_xor   = 0;
+   cksum_crc   = CRC32_INIT;
    cksum_count = 0;
 }
 
