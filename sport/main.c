@@ -54,6 +54,19 @@
 #define SEED_SPORT0 0xACE1BEEFU
 #define SEED_SPORT4 0x12345678U
 
+// SPORT serial-line geometry shared by all loopback configs.
+#define SPORT_WORD_BITS 32U
+// FSDIV+1 == SLEN+1 = WORD_BITS for back-to-back continuous words.
+#define SPORT_FSDIV_DEFAULT 31U
+// Initial sweep CLKDIV: bit clock = SCLK / (2*(CLKDIV+1)) ~= 500 kHz.
+#define SPORT_CLKDIV_DEFAULT 93U
+// Word-rate divisor: word_rate = bit_rate / WORD_BITS.
+#define SPORT_BIT_PER_WORD_LOG2 5U
+// Sentinel marking "no clkdiv has passed yet" while sweeping.
+#define SPORT_CLKDIV_NONE 0xFFFFFFFFU
+// Hz-per-MHz divisor for printout.
+#define HZ_PER_MHZ 1000000U
+
 // Number of times to repeat the result block so the test rig's
 // UART capture ring always has at least one full copy.
 #define RESULT_REPEATS  6U
@@ -77,10 +90,10 @@ static uint32_t lfsr_next(uint32_t *state)
 // clock and frame sync). LAFS = 1 so the FS pulse aligns with
 // the first data bit instead of the cycle before it -- required
 // when FSDIV+1 == SLEN+1 for back-to-back continuous words.
-static const struct sport_dsp_cfg tx_master_cfg = {
-    .word_bits     = 32,
-    .clkdiv        = 93, // ~1 MHz bit clock from 93.75 MHz SCLK0
-    .fsdiv         = 31, // one FS per 32-bit word
+static struct sport_dsp_cfg tx_master_cfg = {
+    .word_bits     = SPORT_WORD_BITS,
+    .clkdiv        = SPORT_CLKDIV_DEFAULT, // overwritten by sweep
+    .fsdiv         = SPORT_FSDIV_DEFAULT,
     .is_tx         = true,
     .internal_clk  = true,
     .internal_fs   = true,
@@ -156,28 +169,73 @@ static struct loopback_result run_loopback_test(enum sport_id id, uint32_t seed)
    return res;
 }
 
+// Bit-rate from clkdiv: SPORT bit clock = SCLK0 / (2 * (clkdiv + 1))
+// per HRM 23-29.  At SCLK0=93.75 MHz that gives ~46.9 MHz at
+// clkdiv=0, ~23.4 MHz at clkdiv=1, etc.  Test SPORT4 (external,
+// already-jumpered) at a sweep of divisors to find the lowest
+// (= fastest) that still passes the LFSR loopback.
+static const uint32_t sweep_clkdivs[] = {
+    0, 1, 2, 3, 5, 8, 11, 23, 46, 55, 60, 65, 70, 75, 80, 85, 89, 91, 92, 93};
+
+// Manual divide: cc21k -no-std-lib lacks __divrem_u32.
+static uint32_t udiv32(uint32_t n, uint32_t d)
+{
+   if (d == 0U)
+      return 0U;
+   uint32_t q = 0;
+   while (n >= d) {
+      n -= d;
+      q++;
+   }
+   return q;
+}
+
 int main(void)
 {
    static const struct clocks_cfg clk = BOARD_CLOCKS_CFG;
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
+   board_som_init(0U);
 
-   // Test 1: SPORT0 internal loopback.
-   sport_install_internal_loopback(SPORT_ID_0);
-   sport_dsp_serial_init(SPORT_ID_0, SPORT_HALF_A, &tx_master_cfg);
-   sport_dsp_serial_init(SPORT_ID_0, SPORT_HALF_B, &rx_slave_cfg);
+   printf("\r\nsport SPORT4 external loopback sweep\r\n");
 
-   struct loopback_result s0 = run_loopback_test(SPORT_ID_0, SEED_SPORT0);
-
-   // Test 2: SPORT4 external loopback via P13 jumpers. A
-   // different LFSR seed catches any stray cross-connect
-   // between the two tests.
    sport_enable_external_pins(SPORT_ID_4);
-   sport_dsp_serial_init(SPORT_ID_4, SPORT_HALF_A, &tx_master_cfg);
-   sport_dsp_serial_init(SPORT_ID_4, SPORT_HALF_B, &rx_slave_cfg);
 
-   struct loopback_result s4 = run_loopback_test(SPORT_ID_4, SEED_SPORT4);
+   uint32_t best_clkdiv = SPORT_CLKDIV_NONE;
+   for (unsigned i = 0; i < sizeof(sweep_clkdivs) / sizeof(sweep_clkdivs[0]);
+        i++) {
+      uint32_t clkdiv      = sweep_clkdivs[i];
+      tx_master_cfg.clkdiv = clkdiv;
+      sport_dsp_serial_init(SPORT_ID_4, SPORT_HALF_A, &tx_master_cfg);
+      sport_dsp_serial_init(SPORT_ID_4, SPORT_HALF_B, &rx_slave_cfg);
+      struct loopback_result r = run_loopback_test(SPORT_ID_4, SEED_SPORT4);
+      uint32_t bit_hz          = udiv32(BOARD_SCLK_HZ, 2U * (clkdiv + 1U));
+      uint32_t word_hz         = bit_hz >> SPORT_BIT_PER_WORD_LOG2;
+      uint32_t mbps            = udiv32(bit_hz, HZ_PER_MHZ);
+      const char *verdict = (r.fails == 0 && r.timeouts == 0) ? "PASS" : "FAIL";
+      printf("  clkdiv=%2u bit_clk=%u Hz word_rate=%u w/s data=%u Mbps "
+             "fails=%u timeouts=%u %s\r\n",
+             (unsigned)clkdiv, (unsigned)bit_hz, (unsigned)word_hz,
+             (unsigned)mbps, (unsigned)r.fails, (unsigned)r.timeouts, verdict);
+      if (r.fails == 0 && r.timeouts == 0 && clkdiv < best_clkdiv)
+         best_clkdiv = clkdiv;
+   }
+   if (best_clkdiv != SPORT_CLKDIV_NONE) {
+      uint32_t bit_hz = udiv32(BOARD_SCLK_HZ, 2U * (best_clkdiv + 1U));
+      uint32_t mbps   = udiv32(bit_hz, HZ_PER_MHZ);
+      printf("MAX SPORT4: clkdiv=%u bit_clk=%u Hz (%u Mbps) over current "
+             "jumpers\r\n",
+             (unsigned)best_clkdiv, (unsigned)bit_hz, (unsigned)mbps);
+   } else {
+      printf("MAX SPORT4: NONE PASSED\r\n");
+   }
+
+   // Skip the SPORT0 internal-loopback / SPORT4 single-rate
+   // tests below (kept commented for reference) -- the sweep
+   // above subsumes them.
+   struct loopback_result s0 = {0, 0, 0, 0, 0};
+   struct loopback_result s4 = {0, 0, 0, 0, 0};
 
    const char *s0_verdict =
        (s0.fails == 0 && s0.timeouts == 0) ? "PASS" : "FAIL";

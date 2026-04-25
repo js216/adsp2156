@@ -46,4 +46,17 @@ void pinmux_spi2(int is_master, unsigned miom);
 // Ignored in master role since master always drives its own lanes.
 void pinmux_spi2_dir(int is_master, unsigned miom, int is_tx);
 
+// Configure PA6..PA9 for SPI0 (single-lane only): PA6 = CLK,
+// PA7 = MISO, PA8 = MOSI, PA9 = SEL1b / SSb.  Alt function "a"
+// (mux value 0).  ``is_master`` picks which pins the DSP drives:
+// master asserts CLK / MOSI / SEL1 on PA6/PA8/PA9, senses MISO
+// on PA7; slave senses CLK/MOSI/SS on PA6/PA8/PA9 and sources
+// MISO on PA7.  FER is set on the pin(s) the DSP drives.
+void pinmux_spi0(int is_master);
+
+// Configure PA10..PA13 for SPI1 (single-lane only): PA10 = CLK,
+// PA11 = MISO, PA12 = MOSI, PA13 = SEL1b / SSb.  Alt function "b"
+// (mux value 1).  Same role rules as pinmux_spi0.
+void pinmux_spi1(int is_master);
+
 #endif // PINMUX_H

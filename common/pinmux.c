@@ -159,3 +159,85 @@ void pinmux_spi2_dir(int is_master, unsigned miom, int is_tx)
    // INEN for the whole SPI2 pin group unconditionally.
    MMR(REG_PORTA_INEN_SET) = PA_SPI2_FER_MASK;
 }
+
+// ----------------------------------------------------------------------
+// SPI0 pin mux: PA6..PA9 at alt function "a" (mux = 0).
+// PA6 = CLK, PA7 = MISO, PA8 = MOSI, PA9 = SEL1 / SS.
+// Slash-position convention: on PA6..PA9 the SPI0 signal is
+// listed first in the SOM pin table (PA_06/SPI0_CLK/UART0_TXb/
+// ...) so mux = 0 picks SPI0.  FER governs which pins the DSP
+// drives: master drives CLK/MOSI/SEL1, slave drives MISO.
+// ----------------------------------------------------------------------
+#define PA_SPI0_FER_MASK 0x03C0U // PA6..PA9
+
+// SPI0 lane bit positions within PORTA registers.
+#define PA_SPI0_CLK_BIT  6U // PA6  = SPI0_CLK
+#define PA_SPI0_MISO_BIT 7U // PA7  = SPI0_MISO
+#define PA_SPI0_MOSI_BIT 8U // PA8  = SPI0_MOSI
+#define PA_SPI0_SEL1_BIT 9U // PA9  = SPI0_SEL1 / SS
+#define PA_SPI0_MUX_MASK                                                       \
+   ((3U << (2U * PA_SPI0_CLK_BIT)) | (3U << (2U * PA_SPI0_MISO_BIT)) |         \
+    (3U << (2U * PA_SPI0_MOSI_BIT)) | (3U << (2U * PA_SPI0_SEL1_BIT)))
+
+void pinmux_spi0(int is_master)
+{
+   uint32_t mux = MMR(REG_PORTA_MUX);
+   mux &= ~PA_SPI0_MUX_MASK; // mux = 0 on PA6..PA9
+   MMR(REG_PORTA_MUX) = mux;
+
+   uint32_t fer = MMR(REG_PORTA_FER);
+   fer &= ~PA_SPI0_FER_MASK;
+   if (is_master) {
+      // Master drives CLK (PA6), MOSI (PA8), SEL1 (PA9); reads
+      // MISO (PA7) as input -> FER=0 on PA7 per SPI2 precedent.
+      fer |= (1U << PA_SPI0_CLK_BIT) | (1U << PA_SPI0_MOSI_BIT) |
+             (1U << PA_SPI0_SEL1_BIT);
+   } else {
+      // Slave drives MISO (PA7); reads CLK/MOSI/SS as inputs.
+      fer |= (1U << PA_SPI0_MISO_BIT);
+   }
+   MMR(REG_PORTA_FER) = fer;
+
+   // All four pads need their input buffer enabled so the slave
+   // receive path (or master MODF) can sense edges.
+   MMR(REG_PORTA_INEN_SET) = PA_SPI0_FER_MASK;
+}
+
+// ----------------------------------------------------------------------
+// SPI1 pin mux: PA10..PA13 at alt function "b" (mux = 1).
+// PA10 = CLK, PA11 = MISO, PA12 = MOSI, PA13 = SEL1 / SS.
+// Matches the ADI 21569 pinmux-tool generated config for SPI1.
+// ----------------------------------------------------------------------
+#define PA_SPI1_FER_MASK 0x3C00U // PA10..PA13
+
+// SPI1 lane bit positions within PORTA registers.
+#define PA_SPI1_CLK_BIT  10U // PA10 = SPI1_CLK
+#define PA_SPI1_MISO_BIT 11U // PA11 = SPI1_MISO
+#define PA_SPI1_MOSI_BIT 12U // PA12 = SPI1_MOSI
+#define PA_SPI1_SEL1_BIT 13U // PA13 = SPI1_SEL1 / SS
+#define PA_SPI1_MUX_MASK                                                       \
+   ((3U << (2U * PA_SPI1_CLK_BIT)) | (3U << (2U * PA_SPI1_MISO_BIT)) |         \
+    (3U << (2U * PA_SPI1_MOSI_BIT)) | (3U << (2U * PA_SPI1_SEL1_BIT)))
+#define PA_SPI1_MUX_VAL                                                        \
+   ((1U << (2U * PA_SPI1_CLK_BIT)) | (1U << (2U * PA_SPI1_MISO_BIT)) |         \
+    (1U << (2U * PA_SPI1_MOSI_BIT)) | (1U << (2U * PA_SPI1_SEL1_BIT)))
+
+void pinmux_spi1(int is_master)
+{
+   uint32_t mux = MMR(REG_PORTA_MUX);
+   mux &= ~PA_SPI1_MUX_MASK;
+   mux |= PA_SPI1_MUX_VAL;
+   MMR(REG_PORTA_MUX) = mux;
+
+   uint32_t fer = MMR(REG_PORTA_FER);
+   fer &= ~PA_SPI1_FER_MASK;
+   if (is_master) {
+      fer |= (1U << PA_SPI1_CLK_BIT) | (1U << PA_SPI1_MOSI_BIT) |
+             (1U << PA_SPI1_SEL1_BIT);
+   } else {
+      fer |= (1U << PA_SPI1_MISO_BIT);
+   }
+   MMR(REG_PORTA_FER) = fer;
+
+   MMR(REG_PORTA_INEN_SET) = PA_SPI1_FER_MASK;
+}

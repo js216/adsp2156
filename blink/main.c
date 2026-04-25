@@ -1,41 +1,49 @@
 // SPDX-License-Identifier: MIT
-// main.c --- LED blink demo for the EV-21569-SOM
+// main.c --- Three-phase LED blink demo for the EV-21569-SOM
 // Copyright (c) 2026 Jakob Kastelic
 
-// Toggles three LEDs driven by a Microchip MCP23017 GPIO
-// expander on TWI2 at 7-bit address 0x21. Port A bits 0..2
-// are the LEDs; bit 5 is the active-low UART0_EN line that
-// gates UART0 TX to the carrier-board header, left low so
-// the UART stays enabled while the blink runs.
+// Drives the three on-SOM LEDs via the MCP23017 expander on
+// TWI2 at 7-bit address 0x21.  Each LED runs at the same
+// frequency (50% duty, period PERIOD_MS) but phase-shifted 120
+// degrees from the next, synthesising a three-phase blink.
+//
+// Per SOM schematic:
+//   GPA0 = LED6            (active-high)
+//   GPA1 = LED7            (active-high)
+//   GPA2 = LED4            (active-high)
+//   GPA3 = *SPIFLASH_CS_EN (set HIGH so flash stays isolated)
+//   GPA4 = *SPI2D2_D3_EN   (set HIGH so flash stays isolated)
+//   GPA5 = *UART0_EN       (set LOW  so UART0 TX reaches header)
+//   GPA6 = *UART0_FLOW_EN  (set HIGH, flow gate unused)
+//   GPA7 = strap input
+// Isolation bits and UART routing are handled by board_som_init;
+// this file only supplies the LED slot pattern.
 
 #include "board.h"
 #include "clocks.h"
-#include "mcp23017.h"
-#include "pinmux.h"
 #include "timer.h"
-#include "twi.h"
+#include <stdint.h>
 
-// 7-bit I2C address of the on-SOM MCP23017. Factory-set by the
-// three address strap pins (A2 A1 A0) = 0 0 1.
-#define LED_EXPANDER_ADDR 0x21U
+// Full waveform period.  Resolved into 6 equal slots so 50%-duty
+// 120-degree phases (LED1 at +T/3, LED2 at +2T/3) land on slot
+// boundaries.
+#define PERIOD_MS 900U
+#define SLOT_MS   (PERIOD_MS / 6U)
 
-// Port A bit assignments on this SOM. Bits 0..2 are the three
-// on-board LEDs (LED4, LED6, LED7); bit 5 is UART0_EN (drive
-// low to let UART0 TX reach the carrier-board header); bit 7
-// is a read-only strap, so we configure it as an input. Bits
-// 3, 4, 6 are outputs but unused.
-#define LED_BITS         0x07U
-#define PORTA_INPUT_MASK 0x80U // bit 7 input, 0..6 output
+// Port-A LED bitmasks for each of the 6 slots.  LED0=GPA0,
+// LED1=GPA1, LED2=GPA2.
+//
+// slot | t / PERIOD | LED0 LED1 LED2 | bits
+//   0  | [0,  1/6)  |  on  off  on   | 0b101 = 0x05
+//   1  | [1/6,2/6)  |  on  off off   | 0b001 = 0x01
+//   2  | [2/6,3/6)  |  on  on  off   | 0b011 = 0x03
+//   3  | [3/6,4/6)  |  off on  off   | 0b010 = 0x02
+//   4  | [4/6,5/6)  |  off on  on    | 0b110 = 0x06
+//   5  | [5/6,1)    |  off off on    | 0b100 = 0x04
+#define LED_PHASE_COUNT 6U
 
-// MCP23017 port B is unused; mark all pins as inputs.
-#define MCP23017_DIR_ALL_INPUT 0xFFU
-
-// TWI2 bus timing: prescale = 12 (SCLK / 12 ~ 10 MHz internal
-// timebase), CLKDIV = 50/50 -> SCL ~ 100 kHz.
-#define TWI_PRESCALE 12U
-#define TWI_CLKDIV   50U
-
-#define BLINK_MS 800U
+static const uint8_t led_phase_table[LED_PHASE_COUNT] = {0x05U, 0x01U, 0x03U,
+                                                         0x02U, 0x06U, 0x04U};
 
 int main(void)
 {
@@ -43,25 +51,12 @@ int main(void)
    clocks_init(&clk);
    timer_init();
 
-   pinmux_twi2();
-   static const struct twi_clk_cfg twi_cfg = {TWI_PRESCALE, TWI_CLKDIV,
-                                              TWI_CLKDIV};
-   twi_init(&twi_cfg);
+   board_som_init(0U);
 
-   // Configure the MCP23017 once: port A bit 7 is an input,
-   // bits 0..6 are outputs, port B is all inputs (unused).
-   static const struct mcp23017_target led_a = {LED_EXPANDER_ADDR,
-                                                MCP23017_PORT_A};
-   static const struct mcp23017_target led_b = {LED_EXPANDER_ADDR,
-                                                MCP23017_PORT_B};
-   mcp23017_set_direction(&led_a, PORTA_INPUT_MASK);
-   mcp23017_set_direction(&led_b, MCP23017_DIR_ALL_INPUT);
-
+   unsigned slot = 0U;
    for (;;) {
-      mcp23017_write_gpio(&led_a, LED_BITS);
-      delay_ms(BLINK_MS);
-
-      mcp23017_write_gpio(&led_a, 0U);
-      delay_ms(BLINK_MS);
+      board_som_set_leds(led_phase_table[slot]);
+      delay_ms(SLOT_MS);
+      slot = (slot + 1U) % LED_PHASE_COUNT;
    }
 }

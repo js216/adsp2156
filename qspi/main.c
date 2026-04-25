@@ -49,7 +49,6 @@
 
 #define SPI_PORT       SPI_ID_2
 #define SPI_RX_DMA     DMA_CH_SPI2_RX
-#define SPI_TX_DMA     DMA_CH_SPI2_TX
 #define SPI_STRIDE     0x1000U
 #define STARTUP_MS     500U
 #define BYTES_PER_WORD 4U
@@ -81,15 +80,6 @@ static uint32_t dma_rx_buf[DMA_BUF_WORDS];
 // the L1_SYS_OFFSET translation and only for the L1_INT window.
 #pragma section("seg_l2_bss", NO_INIT)
 static struct dma_dscl dma_desc[2];
-
-// TX DMA buffer for slave-mode outbound streaming.  256 KiB fits
-// alongside the 512 KiB RX ring in L2 with margin for the rest of
-// seg_l2_bss.  Longer TX tests use DMA FLOW=AUTO on this buffer
-// so the pattern repeats forever; a one-shot (FLOW=STOP) variant
-// sends exactly ``n`` words then stops.
-#define DMA_TX_WORDS (256U * 1024U / BYTES_PER_WORD)
-#pragma section("seg_l2_bss", NO_INIT)
-static uint32_t dma_tx_buf[DMA_TX_WORDS];
 
 // Host-compatible 32-bit xorshift PRBS.  Matches
 // make_qspi.prbs_xorshift32 / QspiTest._prbs byte-for-byte: each
@@ -205,12 +195,6 @@ static inline uint32_t crc32_update_word(uint32_t c, uint32_t w)
 // ready to consume.
 static bool dma_armed      = false;
 static uint32_t dma_rd_pos = 0;
-// TX (slave transmit) DMA state.  tx_armed tracks whether the
-// SPI2 TX peripheral DMA channel is currently running.  Separate
-// from dma_armed (which is RX) -- they're never both active in
-// the slave-only demo because pinmux/FER direction must flip and
-// the SPI peripheral only drives one direction at a time.
-static bool tx_armed = false;
 // Auto-consume: when true, the shell's idle-wait loop continuously
 // samples the DMA ring and folds new words into the running
 // checksum.  This keeps up with DMA on bursts larger than the ring
@@ -223,7 +207,6 @@ static bool auto_consume = true;
 static void drain_disarm(void);
 static void drain_arm(void);
 static uint32_t drain_poll_new_words(void);
-static void tx_disarm(void);
 
 static const char *miom_name(enum spi_miom m)
 {
@@ -257,7 +240,6 @@ static void spi_reconfigure(enum spi_miom miom)
        .lsb_first = 0,
    };
    drain_disarm();
-   tx_disarm();
    // HRM 15-12: "Changing to quad SPI mode must be done when the
    // SPI is in a quiescent state."  spi_disable polls SPIF + RFE
    // and then clears CTL.EN before pinmux_spi2 toggles FER bits;
@@ -273,54 +255,6 @@ static void spi_reconfigure(enum spi_miom miom)
    // can hit the 2-deep RFIFO.
    drain_arm();
    spi_rx_enable(SPI_PORT);
-}
-
-// Switch SPI2 into slave-transmit direction at the current
-// lane width.  Pin FER flips so the data lanes become DSP
-// outputs (single: PA0; dual: PA0..PA1; quad: PA0..PA3); RX DMA
-// is disarmed; TX peripheral DMA line is enabled.  Caller must
-// have pre-filled dma_tx_buf and then call tx_arm(n_words) to
-// start transmission.
-static void spi_reconfigure_tx(enum spi_miom miom)
-{
-   struct spi_cfg cfg = {
-       .clkdiv    = 0,
-       .size      = SPI_WORD_32,
-       .miom      = miom,
-       .is_master = 0U,
-       .cpol      = 0,
-       .cpha      = 1U,
-       .lsb_first = 0,
-   };
-   drain_disarm();
-   tx_disarm();
-   spi_disable(SPI_PORT);
-   pinmux_spi2_dir(0, (unsigned)miom, 1);
-   spi_init(SPI_PORT, &cfg);
-   spi_tx_dma_enable(SPI_PORT);
-   current_miom = miom;
-}
-
-// One-shot TX arm: configure the SPI2 TX DMA channel (FLOW=STOP)
-// to stream n_words from dma_tx_buf into the peripheral's TFIFO,
-// then enable the SPI TX channel (TEN=1).  DMA starts pre-filling
-// TFIFO immediately; the master's first clock edge shifts the
-// top byte of the first pre-loaded word out on the data lanes.
-static void tx_arm(uint32_t n_words)
-{
-   dma_oneshot_config(SPI_TX_DMA, (struct dma_buf){dma_tx_buf, n_words},
-                      DMA_DIR_TX_FROM_MEM);
-   dma_enable(SPI_TX_DMA);
-   tx_armed = true;
-   spi_tx_enable(SPI_PORT);
-}
-
-static void tx_disarm(void)
-{
-   if (tx_armed) {
-      dma_disable(SPI_TX_DMA);
-      tx_armed = false;
-   }
 }
 
 static void spi_rx_flush(void)
@@ -748,15 +682,13 @@ static void cmd_info(const char *rest)
    cksum_count = 0;
 }
 
-// p <seed> <bytes>: stage a PRBS stream in dma_tx_buf and start
-// slave TX DMA.  The host poller's q.read(n) / q.read_verify_prbs
-// can then pull the bytes via MISO (single), D0..D1 (dual), or
-// D0..D3 (quad).  <bytes> must be a multiple of 4 and no larger
-// than the TX buffer (DMA_TX_WORDS * BYTES_PER_WORD).  FLOW=STOP,
-// so TX stops after exactly <bytes> bytes -- the master can clock
-// more, but the slave shifter will underrun on subsequent words
-// (TUR latches) and pin state is undefined after that.
-static void cmd_prbs_tx(const char *rest)
+// t <seed> <bytes>: slave single-lane TX, CPU-polled TFIFO.
+// Reconfigures to single-lane if necessary, sets TXCTL.TEN, then
+// streams PRBS(seed) bytes into SPI_TFIFO until <bytes> have been
+// queued, polling STAT.TFS for FIFO-not-full between writes.
+// <bytes> must be a multiple of 4.  No DMA; host-poller owns the
+// clock via FT4222 SingleRead.
+static void cmd_slave_tx(const char *rest)
 {
    uint32_t seed  = 0;
    uint32_t bytes = 0;
@@ -766,45 +698,78 @@ static void cmd_prbs_tx(const char *rest)
       diag_puts("ERR bytes must be >0 and a multiple of 4\r\n");
       return;
    }
-   if ((bytes >> 2U) > DMA_TX_WORDS) {
-      diag_puts("ERR bytes exceeds tx buffer (1 MiB max by default)\r\n");
+   if (current_miom != SPI_MIO_SINGLE) {
+      diag_puts("ERR t requires single-lane; issue m1 first\r\n");
       return;
    }
-   uint32_t n_words = bytes >> 2U;
 
-   // Fill dma_tx_buf with PRBS bytes, packed big-endian into 32-bit
-   // words so byte 0 lands in the MSB of word 0.  SPI slave shifter
-   // is MSB-first (LSBF=0), so the first bit on the wire is bit 7
-   // of byte 0 == PRBS byte 0 bit 7, matching the host generator.
-   prbs_init(seed);
-   for (uint32_t w = 0; w < n_words; w++) {
-      uint32_t b0   = (uint32_t)prbs_next_byte();
-      uint32_t b1   = (uint32_t)prbs_next_byte();
-      uint32_t b2   = (uint32_t)prbs_next_byte();
-      uint32_t b3   = (uint32_t)prbs_next_byte();
-      dma_tx_buf[w] = (b0 << (3U * BITS_PER_BYTE)) |
-                      (b1 << (2U * BITS_PER_BYTE)) | (b2 << BITS_PER_BYTE) | b3;
+   // PADS: bump PA0 drive strength to DS=010 (valid for SCLK0 up
+   // to 93.75 MHz).  Reset DS=001 is only valid up to 62.5 MHz;
+   // at our 93.75 MHz SCLK0 the peripheral output can silently
+   // mis-drive the pad.
+#define REG_PADS0_PORTA0_DS 0x3100440CU
+#define PADS_DS_PA0_MASK    0x7U
+#define PADS_DS_PA0_HIFREQ  0x2U
+   {
+      uint32_t ds = MMR(REG_PADS0_PORTA0_DS);
+      ds &= ~PADS_DS_PA0_MASK;
+      ds |= PADS_DS_PA0_HIFREQ;
+      MMR(REG_PADS0_PORTA0_DS) = ds;
    }
 
-   spi_reconfigure_tx(current_miom);
-   tx_arm(n_words);
+   // DIAG: set TWC to a large value in case slave peripheral
+   // gates MISO drive on remaining word count.  Also configure
+   // full-duplex TXCTL+RXCTL with EN toggle so shifter re-samples
+   // TEN on rising EN edge.
+// 16-bit transfer-word-count saturation: TWC/TWCR are 16-bit fields,
+// so 0xFFFF is the maximum gate-open value the slave shifter accepts.
+#define SPI_TWC_MAX_DIAG 0xFFFFU
+   uint32_t ctl                 = MMR(spi_base + OFF_SPI_CTL);
+   MMR(spi_base + OFF_SPI_CTL)  = ctl & ~BIT_SPI_CTL_EN;
+   MMR(spi_base + OFF_SPI_TWC)  = SPI_TWC_MAX_DIAG;
+   MMR(spi_base + OFF_SPI_TWCR) = SPI_TWC_MAX_DIAG;
+   // ADI slave TX: TDR=EMPTY (trigger on FIFO empty) | TDU (send
+   // zeros on underrun) | TEN.  No TTI -- TTI is master-only.
+#define SPI_TXCTL_TDR_EMPTY (5U << POS_SPI_TXCTL_TDR)
+   MMR(spi_base + OFF_SPI_TXCTL) =
+       SPI_TXCTL_TDR_EMPTY | BIT_SPI_TXCTL_TDU | BIT_SPI_TXCTL_TEN;
+   MMR(spi_base + OFF_SPI_RXCTL) = BIT_SPI_RXCTL_REN;
+   MMR(spi_base + OFF_SPI_CTL)   = ctl;
 
-   diag_puts("tx ready seed=0x");
+   prbs_init(seed);
+   uint32_t n_words = bytes >> 2U;
+   for (uint32_t w = 0; w < n_words; w++) {
+      while ((MMR(spi_base + OFF_SPI_STAT) & BIT_SPI_STAT_TFF) != 0U) {
+         /* spin: TFIFO full (bit 23 TFF) */
+      }
+      // DIAG: seed=0 -> load all zeros so master sees 0x00 if
+      // slave drives at all.  Any other seed -> PRBS stream.
+      uint32_t wval = 0U;
+      if (seed == 0U) {
+         wval = 0U;
+      } else {
+         uint32_t b0 = (uint32_t)prbs_next_byte();
+         uint32_t b1 = (uint32_t)prbs_next_byte();
+         uint32_t b2 = (uint32_t)prbs_next_byte();
+         uint32_t b3 = (uint32_t)prbs_next_byte();
+         wval = (b0 << (3U * BITS_PER_BYTE)) | (b1 << (2U * BITS_PER_BYTE)) |
+                (b2 << BITS_PER_BYTE) | b3;
+      }
+      MMR(spi_base + OFF_SPI_TFIFO) = wval;
+   }
+
+   diag_puts("tx queued seed=0x");
    diag_hex32(seed);
    diag_puts(" bytes=0x");
    diag_hex32(bytes);
-   diag_puts(" mode=");
-   diag_puts(miom_name(current_miom));
    diag_puts(" ctl=0x");
    diag_hex32(MMR(spi_base + OFF_SPI_CTL));
    diag_puts(" txc=0x");
    diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
+   diag_puts(" stat=0x");
+   diag_hex32(MMR(spi_base + OFF_SPI_STAT));
    diag_puts(" fer=0x");
    diag_hex32(MMR(REG_PORTA_FER));
-   diag_puts(" dma_stat=0x");
-   diag_hex32(dma_stat_raw(SPI_TX_DMA));
-   diag_puts(" xcnt=0x");
-   diag_hex32(dma_xcnt_cur(SPI_TX_DMA));
    diag_puts("\r\n");
 }
 
@@ -823,6 +788,51 @@ static void cmd_hex_dump(const char *rest)
    op_hex_dump(count, forever);
 }
 
+// g 0 | g 1: override PA0 as GPIO output, drive LOW or HIGH.
+// Diagnostic only -- takes PA0 away from SPI2 so the master's
+// MISO readback reflects the level we forced.  Used to verify
+// the DSP-PA0 -> FT4222-MISO trace before pointing at silicon.
+#define REG_PORTA_FER_CLR  0x31004008U
+#define REG_PORTA_DIR      0x31004018U
+#define REG_PORTA_DIR_SET  0x3100401CU
+#define REG_PORTA_DATA_SET 0x31004010U
+#define REG_PORTA_DATA_CLR 0x31004014U
+#define PA0_BIT            (1U << 0U)
+
+// g <pin> <level>: drive a single PA pin via GPIO.
+// <pin>=0..5, <level>=0|1.  SPI is disabled first so peripheral
+// output drivers don't fight GPIO direction.  Used to probe
+// which PA pin is actually wired to FT4222 MISO.
+#define GPIO_DRIVE_PIN_MAX 5U // PA0..PA5 -- the SPI2 lane group
+
+static void cmd_gpio_drive(const char *rest)
+{
+   uint32_t pin = 0;
+   uint32_t lvl = 1;
+   rest         = parse_u32(rest, &pin);
+   (void)parse_u32(rest, &lvl);
+   if (pin > GPIO_DRIVE_PIN_MAX) {
+      diag_puts("ERR pin must be 0..5\r\n");
+      return;
+   }
+   drain_disarm();
+   spi_disable(SPI_PORT);
+   uint32_t mask          = 1U << pin;
+   MMR(REG_PORTA_FER_CLR) = mask;
+   MMR(REG_PORTA_DIR_SET) = mask;
+   if (lvl == 0U)
+      MMR(REG_PORTA_DATA_CLR) = mask;
+   else
+      MMR(REG_PORTA_DATA_SET) = mask;
+   diag_puts("gpio PA");
+   diag_hex32(pin);
+   diag_puts(" lvl=");
+   diag_hex32(lvl);
+   diag_puts(" data=0x");
+   diag_hex32(MMR(REG_PORTA_DATA));
+   diag_puts("\r\n");
+}
+
 static void print_help(void)
 {
    diag_puts("commands (slave-only):\r\n"
@@ -837,8 +847,8 @@ static void print_help(void)
              "  h                stream received words forever,\r\n"
              "                   stop with any key\r\n"
              "  h <n>            dump exactly <n> bytes (multiple of 4)\r\n"
-             "  p <seed> <n>     slave TX: stage PRBS(seed) of <n>\r\n"
-             "                   bytes and start DMA transmit (FLOW=STOP)\r\n"
+             "  t <seed> <n>     slave single-lane TX: CPU-polled,\r\n"
+             "                   streams PRBS(seed) of <n> bytes into TFIFO\r\n"
              "editing: backspace deletes, up-arrow recalls last line.\r\n");
    diag_puts("state: mode=");
    diag_puts(miom_name(current_miom));
@@ -874,127 +884,31 @@ static void handle_command(const char *line)
       case 'a': cmd_auto(line + 1); break;
       case 'i': cmd_info(line + 1); break;
       case 'h': cmd_hex_dump(line + 1); break;
-      case 'p': cmd_prbs_tx(line + 1); break;
-      case 'q': {
-         // DIAG: polled-TX bring-up.  No DMA, no PRBS.  Switch to
-         // slave TX at current lane width, shove one fixed pattern
-         // into TFIFO a few times, enable TEN, report state.
-         // Polled-TX bring-up pattern.  Four fixed words direct-
-         // written to TFIFO; DSP shifts them out MISO on next CS.
-#define DIAG_TFIFO_W0 0x00000000U
-#define DIAG_TFIFO_W1 0x00000000U
-#define DIAG_TFIFO_W2 0x00000000U
-#define DIAG_TFIFO_W3 0x00000000U
-         // Fill TFIFO first (shifter loads from TFIFO on the first
-         // active SPI_CLK edge after SS), then enable TEN.  Keep
-         // CTL.EN set throughout so SS edge detection stays live.
-         // DIAG: skip spi_reconfigure_tx entirely.  Leave current
-         // (slave RX) state, just set TEN and fill TFIFO.  If slave
-         // shifts MISO now, the reconfigure was breaking SS detect.
-         // Even in slave RX the MISO pad reads back 0xFF on the
-         // master side despite EMISO=1 + FER[PA0]=1.  Force the
-         // GPIO-level direction bit too -- HRM is ambiguous about
-         // whether PORT_DIR_SET is needed when FER=1, so try both.
-#define REG_PORTA_DIR_SET 0x3100401CU
-#define REG_PORTA_DIR_CLR 0x31004020U
-         // Clear PA0 GPIO direction bit so the FER=1 peripheral
-         // path is unambiguously in charge of PA0 output driver.
-         MMR(REG_PORTA_DIR_CLR) = 1U << 0U;
-         // HRM 12-126: PADS_PORTA0_DS packs 3 bits per PA pin.
-         // Reset = 0x00249249 = DS=001 for every pin (valid for
-         // SCLK0 <= 62.5 MHz only); our SCLK0 = 93.75 MHz needs
-         // DS=010.  Bump DS=010 for the SPI2 data lanes PA0..PA3
-         // so the output pad drive strength matches the system-
-         // clock frequency the SPI shifter runs on.
-#define REG_PADS0_PORTA0_DS      0x3100440CU
-#define PADS_DS_SPI2_DATA_MASK   0xFFFU /* PA0..PA3, 3 bits each */
-#define PADS_DS_SPI2_DATA_HIFREQ 0x492U /* 0b010_010_010_010 */
-         {
-            uint32_t ds = MMR(REG_PADS0_PORTA0_DS);
-            ds &= ~(uint32_t)PADS_DS_SPI2_DATA_MASK;
-            ds |= (uint32_t)PADS_DS_SPI2_DATA_HIFREQ;
-            MMR(REG_PADS0_PORTA0_DS) = ds;
-         }
-         // Clear any stale ILAT bits + STAT W1Cs.  If any prior
-         // error latched (ROR during boot RX, etc), it might gate
-         // the TX output path.
-#define SPI_ILAT_CLR_ALL 0xFFFFFFFFU
-         MMR(spi_base + OFF_SPI_ILAT_CLR) = SPI_ILAT_CLR_ALL;
-         MMR(spi_base + OFF_SPI_STAT)     = MMR(spi_base + OFF_SPI_STAT);
-         // Re-assert EMISO + CTL slave single.
-         MMR(spi_base + OFF_SPI_CTL) = BIT_SPI_CTL_EN | BIT_SPI_CTL_CPHA |
-                                       BIT_SPI_CTL_EMISO | SPI_SIZE_32;
-         // DIAG extra dump to verify PORT state.
-#define REG_PORTA_DIR 0x31004018U
-         diag_puts("diag porta_dir=0x");
-         diag_hex32(MMR(REG_PORTA_DIR));
-         diag_puts(" porta_fer=0x");
-         diag_hex32(MMR(REG_PORTA_FER));
-         diag_puts(" porta_data=0x");
-         diag_hex32(MMR(REG_PORTA_DATA));
-         diag_puts("\r\n");
-         // ADI adi_spi_2156x.c slave TX: TXCTL = TDR=5 (request on
-         // empty TFIFO) | TDU (send zeros on underrun) | TEN.
-#define SPI_TXCTL_ADI_SLAVE_TX                                                 \
-   ((5U << POS_SPI_TXCTL_TDR) | BIT_SPI_TXCTL_TDU | BIT_SPI_TXCTL_TEN)
-         MMR(spi_base + OFF_SPI_TXCTL) = SPI_TXCTL_ADI_SLAVE_TX;
-         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W0;
-         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W1;
-         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W2;
-         MMR(spi_base + OFF_SPI_TFIFO) = DIAG_TFIFO_W3;
-         diag_puts("polled tx loaded ctl=0x");
-         diag_hex32(MMR(spi_base + OFF_SPI_CTL));
-         diag_puts(" txc=0x");
-         diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
-         diag_puts(" stat=0x");
-         diag_hex32(MMR(spi_base + OFF_SPI_STAT));
-         diag_puts("\r\n");
-         break;
-      }
-      case 'g': {
-         // GPIO diag: take PA0 away from SPI2, drive it HIGH via
-         // PORT direct-GPIO, confirm readback, then invite the host
-         // to probe MISO on the FT4222 side.  If FT4222 still reads
-         // 0xFF on MISO, the trace between DSP-PA0 and FT4222 MISO
-         // isn't wired -- which would explain why slave TX can't
-         // surface data to the master regardless of SPI config.
-#define REG_PORTA_FER_CLR  0x31004008U
-#define REG_PORTA_DATA_SET 0x31004010U
-#define REG_PORTA_DATA_CLR 0x31004014U
-         MMR(REG_PORTA_FER_CLR) = 1U << 0U; // FER[PA0]=0 -> GPIO
-         MMR(REG_PORTA_DIR_SET) = 1U << 0U; // output
-         // Argument selects LOW vs HIGH: 'g0' = low, 'g1' or 'g' = high.
-         if (line[1] == '0')
-            MMR(REG_PORTA_DATA_CLR) = 1U << 0U;
-         else
-            MMR(REG_PORTA_DATA_SET) = 1U << 0U;
-         diag_puts("gpio PA0 data=0x");
-         diag_hex32(MMR(REG_PORTA_DATA));
-         diag_puts(" dir=0x");
-         diag_hex32(MMR(REG_PORTA_DIR));
-         diag_puts(" fer=0x");
-         diag_hex32(MMR(REG_PORTA_FER));
-         diag_puts("\r\n");
-         break;
-      }
-      case 'x':
-         diag_puts("tx_stat spi_stat=0x");
-         diag_hex32(MMR(spi_base + OFF_SPI_STAT));
-         diag_puts(" txc=0x");
-         diag_hex32(MMR(spi_base + OFF_SPI_TXCTL));
-         diag_puts(" dma_stat=0x");
-         diag_hex32(dma_stat_raw(SPI_TX_DMA));
-         diag_puts(" xcnt=0x");
-         diag_hex32(dma_xcnt_cur(SPI_TX_DMA));
-         diag_puts(" addr=0x");
-         diag_hex32(dma_addr_cur(SPI_TX_DMA));
-         diag_puts("\r\n");
-         break;
+      case 't': cmd_slave_tx(line + 1); break;
+      case 'g': cmd_gpio_drive(line + 1); break;
       default:
          diag_puts("ERR unknown cmd\r\n");
          print_help();
          break;
    }
+}
+
+// Grant SPU secure-requester status to SPI2 + its DMA channels.
+// Reset default leaves these non-secure; ADI's own SPIDMAMode
+// example calls adi_spu_EnableMasterSecure(SPI2_SPU_PID) +
+// both DMA PIDs before any slave TX works.  Without this the
+// peripheral shifter can receive but doesn't drive MISO.
+// SPU_SECUREP[n].MSEC = bit 1.
+#define REG_SPU0_SECUREP_SPI2       0x3108BB44U
+#define REG_SPU0_SECUREP_SPI2_TxDMA 0x3108BB38U
+#define REG_SPU0_SECUREP_SPI2_RxDMA 0x3108BB34U
+#define SPU_SECUREP_MSEC            (1U << 1U)
+
+static void spu_enable_spi2_secure(void)
+{
+   MMR(REG_SPU0_SECUREP_SPI2) |= SPU_SECUREP_MSEC;
+   MMR(REG_SPU0_SECUREP_SPI2_TxDMA) |= SPU_SECUREP_MSEC;
+   MMR(REG_SPU0_SECUREP_SPI2_RxDMA) |= SPU_SECUREP_MSEC;
 }
 
 int main(void)
@@ -1006,6 +920,12 @@ int main(void)
    delay_ms(STARTUP_MS);
 
    diag_puts("\r\nqspi shell starting\r\n");
+
+   // Gate off the on-SOM flash before we touch SPI2 so PA_00
+   // (slave MISO) isn't contested, and keep UART0 TX routed.
+   board_som_init(0U);
+
+   spu_enable_spi2_secure();
 
    spi_base = REG_SPI0_BASE + ((uint32_t)SPI_PORT * SPI_STRIDE);
    spi_reconfigure(SPI_MIO_SINGLE);

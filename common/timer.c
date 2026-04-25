@@ -62,9 +62,17 @@ uint32_t timer_ticks(void)
 void delay_us(const uint32_t us)
 {
    // wait_ticks = us * (SCLK_HZ / 1e6) = us * 93.75 = us * 375 / 4.
-   // For us up to ~11 million, us*375 stays within 32 bits, which
-   // covers any reasonable busy-wait.
-   uint32_t wait_ticks = (us * SCLK_US_NUMER) / SCLK_US_DENOM;
+   // The naive (us * 375) / 4 overflows the 32-bit unsigned domain
+   // once us crosses 11.45 million; cc21k's 32-bit multiply also
+   // misbehaves earlier, near the signed boundary at ~5.7 million.
+   // Decompose into a non-overflowing form by splitting us into a
+   // multiple-of-4 part and a remainder so the *375 always fits:
+   //   wait_ticks = (us / 4) * 375 + ((us % 4) * 375) / 4.
+   // The first term overflows only at us > 4 * (2^32/375) > 4.5e10,
+   // which is already a 12-hour delay we will never request.
+   uint32_t hi         = (us >> 2U) * SCLK_US_NUMER;
+   uint32_t lo         = ((us & 3U) * SCLK_US_NUMER) >> 2U;
+   uint32_t wait_ticks = hi + lo;
    uint32_t start      = timer_ticks();
    while ((timer_ticks() - start) < wait_ticks) {
       // spin
