@@ -10,8 +10,10 @@
 //
 // P13 hosts DAI1 pin buffers (the DAI0 slots on P13 are not
 // bonded on either package so they are omitted). P14 hosts
-// PORTA/PORTB signals; PA06/PA07 carry UART0 TX/RX and must
-// not be driven while printf is talking, so they are skipped.
+// PORTA/PORTB signals; PA06/PA07 carry UART0 TX/RX.  They are
+// included in the scan but UART0 is silenced during the probe
+// phase (pins taken away from their peripheral alt) and re-
+// enabled via pinmux_uart0() before any printf happens again.
 // DAI1_PIN11/PIN12 appear on P13.22/P13.24 but are only
 // bonded on the 400-ball BGA package, so they are omitted to
 // stay safe on 120-lead LQFP.
@@ -28,12 +30,39 @@
 #include "board.h"
 #include "clocks.h"
 #include "gpio.h"
+#include "pinmux.h"
 #include "timer.h"
 #include "uart.h"
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
+
+// cc21k printf mishandles variadic %u/%s on this build, so this
+// file uses non-variadic diag_* helpers (same pattern as qspi).
+static void diag_puts(const char *s)
+{
+   while (*s)
+      uart_putc(*s++);
+}
+
+static void diag_dec(uint32_t v)
+{
+   static const uint32_t pow10[] = {
+       1000000000U, 100000000U, 10000000U, 1000000U, 100000U,
+       10000U,      1000U,      100U,      10U,      1U};
+   bool emitted = false;
+   for (unsigned i = 0; i < sizeof(pow10) / sizeof(pow10[0]); i++) {
+      uint32_t digit = 0;
+      while (v >= pow10[i]) {
+         v -= pow10[i];
+         digit++;
+      }
+      if (digit != 0 || emitted || pow10[i] == 1U) {
+         uart_putc((char)('0' + digit));
+         emitted = true;
+      }
+   }
+}
 
 #define SETTLE_MS 2U
 
@@ -61,7 +90,11 @@ static const struct pin_entry pins[] = {
     {"P13.38", "DAI1_PIN19", GPIO_DAI1_19, GPIO_BANK_DAI1,  18U},
     {"P13.40", "DAI1_PIN20", GPIO_DAI1_20, GPIO_BANK_DAI1,  19U},
 
-    // P14 -- PORTA/PORTB. PA06/PA07 skipped (UART0 TX/RX).
+    // P14 -- PORTA/PORTB.  PA06/PA07 carry UART0 TX/RX; the
+    // scan silences UART0 while driving them and restores it
+    // (via pinmux_uart0) before printing any report.
+    {"P14.02", "PA_06",      GPIO_PA06,    GPIO_BANK_PORTA, 6U },
+    {"P14.04", "PA_07",      GPIO_PA07,    GPIO_BANK_PORTA, 7U },
     {"P14.06", "PA_08",      GPIO_PA08,    GPIO_BANK_PORTA, 8U },
     {"P14.08", "PA_09",      GPIO_PA09,    GPIO_BANK_PORTA, 9U },
     {"P14.10", "PB_05",      GPIO_PB05,    GPIO_BANK_PORTB, 5U },
@@ -74,7 +107,7 @@ static const struct pin_entry pins[] = {
     {"P14.27", "PA_15",      GPIO_PA15,    GPIO_BANK_PORTA, 15U},
 };
 
-#define N_PINS 22U
+#define N_PINS 24U
 
 static_assert(sizeof(pins) / sizeof(pins[0]) == N_PINS,
               "N_PINS out of sync with pin table");
@@ -94,8 +127,12 @@ static const char *port_name(enum gpio_bank b)
 // Format: P13.02 (DAI1_PIN01 on DAI1).
 static void print_pin(uint32_t idx)
 {
-   printf("%s (%s on %s)", pins[idx].header, pins[idx].signal,
-          port_name(pins[idx].bnk));
+   diag_puts(pins[idx].header);
+   diag_puts(" (");
+   diag_puts(pins[idx].signal);
+   diag_puts(" on ");
+   diag_puts(port_name(pins[idx].bnk));
+   diag_puts(")");
 }
 
 // Per-source/target observation codes.
@@ -180,11 +217,11 @@ static void report_pairs(void)
    for (uint32_t i = 0; i < N_PINS; i++) {
       for (uint32_t j = i + 1; j < N_PINS; j++) {
          if (obs[i][j] == OBS_FOLLOW && obs[j][i] == OBS_FOLLOW) {
-            printf("connected: ");
+            diag_puts("connected: ");
             print_pin(i);
-            printf(" <-> ");
+            diag_puts(" <-> ");
             print_pin(j);
-            printf("\r\n");
+            diag_puts("\r\n");
          }
       }
    }
@@ -200,11 +237,11 @@ static void report_one_way(const bool floating[N_PINS])
          if (i == j || floating[i] || floating[j])
             continue;
          if (obs[i][j] == OBS_FOLLOW && obs[j][i] != OBS_FOLLOW) {
-            printf("WARN one-way follow: ");
+            diag_puts("WARN one-way follow: ");
             print_pin(i);
-            printf(" -> ");
+            diag_puts(" -> ");
             print_pin(j);
-            printf("\r\n");
+            diag_puts("\r\n");
          }
       }
    }
@@ -218,17 +255,17 @@ static void report_weird(const bool floating[N_PINS])
          if (i == j || floating[j])
             continue;
          if (obs[i][j] == OBS_INVERT) {
-            printf("WARN inverted: drive ");
+            diag_puts("WARN inverted: drive ");
             print_pin(i);
-            printf(", ");
+            diag_puts(", ");
             print_pin(j);
-            printf(" reads opposite\r\n");
+            diag_puts(" reads opposite\r\n");
          } else if (obs[i][j] == OBS_STUCK_HI) {
-            printf("WARN stuck-high: drive ");
+            diag_puts("WARN stuck-high: drive ");
             print_pin(i);
-            printf(", ");
+            diag_puts(", ");
             print_pin(j);
-            printf(" stays high\r\n");
+            diag_puts(" stays high\r\n");
          }
       }
    }
@@ -236,14 +273,24 @@ static void report_weird(const bool floating[N_PINS])
 
 static void run_test(uint32_t cycle)
 {
-   printf("=== scan %u ===\r\n", cycle);
+   diag_puts("=== scan ");
+   diag_dec(cycle);
+   diag_puts(" ===\r\n");
 
    static bool floating[N_PINS];
+   // Probe phase drives PA_06/PA_07 directly; that steals them
+   // from UART0 so printf is silent until pinmux_uart0() restores
+   // them.  Do all probes first, then restore UART, then report.
    measure_floating(floating);
-
    for (uint32_t i = 0; i < N_PINS; i++) {
       probe_source(i);
    }
+   // Leave every probed pin parked as input and hand PA_06/PA_07
+   // back to UART0.
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      gpio_make_input(pins[i].pin);
+   }
+   pinmux_uart0();
 
    report_pairs();
    report_one_way(floating);
@@ -256,6 +303,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
+   board_som_init(0U);
 
    for (uint32_t i = 0; i < N_PINS; i++) {
       gpio_make_input(pins[i].pin);
