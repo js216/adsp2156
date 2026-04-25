@@ -12,7 +12,7 @@ delay ms=200
 dsp:uart_write data="a 0\r"
 delay ms=50
 mark tag=rx_start
-dsp:qspi_write data=@data.bin clk_div=8 mode=1
+dsp:qspi_write data=@data.bin clk_div=8 mode=1 chunk_size=65535
 mark tag=rx_end
 delay ms=50
 dsp:uart_write data="i\r"

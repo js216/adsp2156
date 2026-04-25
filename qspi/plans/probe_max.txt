@@ -1,0 +1,14 @@
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:qspi_max_transfer_size clk_div=8 mode=1
+dsp:qspi_max_transfer_size clk_div=4 mode=1
+dsp:qspi_max_transfer_size clk_div=2 mode=1
+dsp:qspi_max_transfer_size clk_div=8 mode=2
+dsp:qspi_max_transfer_size clk_div=4 mode=2
+dsp:qspi_max_transfer_size clk_div=2 mode=2
+dsp:qspi_max_transfer_size clk_div=8 mode=4
+dsp:qspi_max_transfer_size clk_div=4 mode=4
+dsp:qspi_max_transfer_size clk_div=2 mode=4
+dsp:uart_close

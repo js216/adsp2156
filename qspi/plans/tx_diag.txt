@@ -1,0 +1,36 @@
+# Diagnostic: force PA0 via GPIO LOW, then HIGH, then via SPI slave TX.
+# Compare FT4222 SingleRead output to expected.
+
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m1\r"
+delay ms=50
+
+# PHASE A: GPIO LOW
+dsp:uart_write data="g 0\r"
+dsp:uart_expect sentinel="gpio PA0" timeout_ms=1000
+delay ms=50
+mark tag=lo_read
+dsp:qspi_read n=4 clk_div=8 mode=1 chunk_size=4
+delay ms=50
+
+# PHASE B: GPIO HIGH
+dsp:uart_write data="g 1\r"
+dsp:uart_expect sentinel="gpio PA0" timeout_ms=1000
+delay ms=50
+mark tag=hi_read
+dsp:qspi_read n=4 clk_div=8 mode=1 chunk_size=4
+delay ms=50
+
+# PHASE C: SPI slave TX (needs m1 reinit since g took PA0 as GPIO)
+dsp:uart_write data="m1\r"
+delay ms=100
+dsp:uart_write data="t 0xC0FFEE 16\r"
+dsp:uart_expect sentinel="tx queued" timeout_ms=2000
+delay ms=50
+mark tag=spi_read
+dsp:qspi_read n=16 clk_div=8 mode=1 chunk_size=16
+
+dsp:uart_close

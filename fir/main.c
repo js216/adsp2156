@@ -114,6 +114,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
+   board_som_init(0U);
    delay_ms(STARTUP_MS);
 
    printf("\r\nfir demo starting\r\n");

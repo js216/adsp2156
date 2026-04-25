@@ -1,0 +1,5 @@
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=30000
+dsp:uart_close

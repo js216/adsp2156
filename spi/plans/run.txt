@@ -1,0 +1,8 @@
+# Boot the 4-quadrant SPI0/SPI1 loopback demo.  Capture 5 s of
+# UART output so every phase's PASS/FAIL + tx/rx dumps land in
+# the tarball.
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=10000
+dsp:uart_close

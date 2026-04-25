@@ -2,12 +2,9 @@
 # Makefile --- Top-level build and static-analysis entry point
 # Copyright (c) 2026 Jakob Kastelic
 
-DEMOS = blink uart gpio sport sport_dma fir iir qspi
+DEMOS = blink uart gpio sport sport_dma fir iir spi qspi
 
-SOURCES = $(wildcard common/*.[ch] \
-            blink/main.c uart/main.c gpio/main.c \
-            sport/main.c sport_dma/main.c fir/main.c \
-            iir/main.c qspi/main.c)
+SOURCES = $(wildcard common/*.[ch]) $(foreach d,$(DEMOS),$(d)/main.c)
 
 all:
 	for d in $(DEMOS); do \
@@ -19,6 +16,8 @@ clean:
 		$(MAKE) -C $$d clean; \
 	done
 	rm -rf build
+	find . -type d -name __pycache__ -exec rm -rf {} +
+	find . -type f -name 'tmp*.txt' -delete
 
 check: format-check cppcheck-check tidy inclusions done
 

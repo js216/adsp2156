@@ -10,6 +10,9 @@ OBJ = \
   pinmux.doj \
   uart.doj \
   printf.doj \
+  twi.doj \
+  mcp23017.doj \
+  board.doj \
   fir.doj \
   assert.doj \
   runtime.doj

@@ -1,0 +1,18 @@
+# 64-byte PRBS + 1-byte 0x00 prefix, one CS frame, dump DSP words.
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="b 128\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+dsp:uart_write data="h 64\r"
+delay ms=200
+mark tag=send_start
+dsp:qspi_write_prbs seed=0xC0FFEE n=64 clk_div=8 mode=4 chunk_size=64 prefix=@safety.bin
+mark tag=send_end
+dsp:uart_expect sentinel="w0000000f=" timeout_ms=5000
+dsp:uart_close

@@ -1,0 +1,7 @@
+# Boot qspi shell, let it settle, capture scope for fault state.
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=2000
+scope:capture chans="C1,C2,C3,C4"
+dsp:uart_close

@@ -5,6 +5,11 @@
 // Brings up UART0 at 115200 8N1 and prints sequentially
 // numbered lines as fast as possible.  Sequential numbering
 // lets the receiver detect any dropped bytes.
+//
+// board_som_init pulls the MCP23017's GPA5 (*UART0_EN) LOW so
+// UART0 TX is actually routed to the carrier-board header.
+// Without that the MCU puts bytes on the UART pin but the '125
+// gate on the SOM leaves them stranded.
 
 #include "board.h"
 #include "clocks.h"
@@ -21,6 +26,7 @@ int main(void)
    clocks_init(&clk);
    uart_init(BOARD_BAUD_DIV);
    timer_init();
+   board_som_init(0U);
    printf("\r\nuart demo starting\r\n");
 
    uint32_t n = 0U;

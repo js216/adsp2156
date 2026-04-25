@@ -1,0 +1,24 @@
+# Plugin-side PRBS streaming at quad / 40 MHz SCK.  With the 1-byte
+# 0x00 safety prefix the FT4222 first-byte hazard is neutralised
+# per CS frame; host's expected XOR of the full PRBS(seed,n) stream
+# is what DSP cksum converges to.
+#
+# n is encoded in the plan.  Duplicate this file for each size
+# (prbs_64mb.txt, prbs_128mb.txt, ...) or patch via sed.
+
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=prbs_start
+dsp:qspi_write_prbs seed=0xC0FFEE n=__NBYTES__ clk_div=2 mode=4 chunk_size=65528 prefix=@safety.bin
+mark tag=prbs_end
+delay ms=500
+dsp:uart_write data="i\r"
+dsp:uart_write data="a 1\r"
+dsp:uart_expect sentinel="auto=on" timeout_ms=120000
+dsp:uart_close

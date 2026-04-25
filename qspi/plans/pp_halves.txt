@@ -20,16 +20,14 @@ delay ms=500
 # Lane width + auto-consume off + startup-race filler.
 dsp:uart_write data="m4\r"
 delay ms=50
-dsp:uart_write data="a 0\r"
-delay ms=50
 dsp:uart_write data="?\r"
 delay ms=200
 mark tag=bursts_start
 # One blob of PRBS-free payload; plugin writes it in a single pass.
 # clk_div=8 (10 MHz SCK), mode=4 (quad).
-dsp:qspi_write data=@data.bin clk_div=8 mode=4
+dsp:qspi_write data=@data.bin clk_div=8 mode=4 chunk_size=65528
 mark tag=bursts_end
 delay ms=100
 dsp:uart_write data="i\r"
-dsp:uart_expect sentinel="sum=0x" timeout_ms=5000
+dsp:uart_expect sentinel="sum=0x" timeout_ms=15000
 dsp:uart_close

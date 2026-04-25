@@ -11,6 +11,7 @@ OBJ = \
   printf.doj \
   twi.doj \
   mcp23017.doj \
+  board.doj \
   clocks.doj \
   timer.doj
 

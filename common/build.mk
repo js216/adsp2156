@@ -29,7 +29,7 @@ ASFLAGS = \
 CFLAGS = \
   -proc $(PROC) -si-revision any -O1 \
   -double-size-32 -char-size-8 -swc \
-  -no-std-inc -I. -I$(LIBSEL_INC) -I../common
+  -no-std-inc -I. -I$(LIBSEL_INC) -I../common $(CFLAGS_EXTRA)
 
 LDFLAGS  = -proc $(PROC) -si-revision any -T ../common/link.ldf -no-mem -no-std-lib
 ELFFLAGS = -proc $(PROC) -b UARTHOST -f ASCII -Width 8 -verbose
@@ -53,6 +53,6 @@ main.dxe: $(OBJ) ../common/link.ldf
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJ) main.dxe main.ldr
+	rm -f $(OBJ) main.dxe main.ldr linker_log.xml
 
 .PHONY: clean

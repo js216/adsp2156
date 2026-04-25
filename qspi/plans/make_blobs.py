@@ -50,6 +50,10 @@ def prbs_xorshift32(seed, n):
 # aligns byte-for-byte with the expected running_xor.
 
 HALF = 256 * 1024
+# Per-CS-frame length.  Plan ops pass chunk_size=CHUNK to the plugin
+# so each frame's first word is the ZP prefix below, defeating the
+# FT4222 first-byte hazard.  65528 is the FT4222 MultiReadWrite
+# empirical ceiling (plugin caps there for mode!=1).
 CHUNK = 65528
 ZP = b"\x00\x00\x00\x00"
 

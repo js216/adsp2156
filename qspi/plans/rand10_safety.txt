@@ -1,0 +1,47 @@
+# Send 10 random bytes four times, with 1/4/2/3-byte safety prefix.
+# rand10.bin = 39 0c 8c 7d 72 47 34 2c d8 10.
+# Default ring, auto_consume=off so drain_poll exposes partial half.
+
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="a 0\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+
+# Phase A: 1-byte safety, frame=11B -> 2 words aligned
+dsp:uart_write data="h 8\r"
+delay ms=100
+mark tag=A_send
+dsp:qspi_write data=@rand10.bin clk_div=8 mode=4 chunk_size=10 prefix=@safety.bin
+dsp:uart_expect sentinel="w00000001=" timeout_ms=5000
+delay ms=200
+
+# Phase B: 4-byte safety, frame=14B -> 3 words aligned
+dsp:uart_write data="h 12\r"
+delay ms=100
+mark tag=B_send
+dsp:qspi_write data=@rand10.bin clk_div=8 mode=4 chunk_size=10 prefix=@safety4.bin
+dsp:uart_expect sentinel="w00000002=" timeout_ms=5000
+delay ms=200
+
+# Phase C: 2-byte safety, frame=12B -> 3 words aligned
+dsp:uart_write data="h 12\r"
+delay ms=100
+mark tag=C_send
+dsp:qspi_write data=@rand10.bin clk_div=8 mode=4 chunk_size=10 prefix=@safety2.bin
+dsp:uart_expect sentinel="w00000002=" timeout_ms=5000
+delay ms=200
+
+# Phase D: 3-byte safety, frame=13B -> 3 words aligned
+dsp:uart_write data="h 12\r"
+delay ms=100
+mark tag=D_send
+dsp:qspi_write data=@rand10.bin clk_div=8 mode=4 chunk_size=10 prefix=@safety3.bin
+dsp:uart_expect sentinel="w00000002=" timeout_ms=5000
+
+dsp:uart_close

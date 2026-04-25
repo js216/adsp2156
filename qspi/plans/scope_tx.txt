@@ -1,0 +1,18 @@
+# Scope trace during slave TX.  Load TFIFO with all zeros so shifter
+# would drive MISO permanently LOW if engaging; then master
+# SingleRead clocks 16 bytes while scope captures all 4 channels.
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m1\r"
+delay ms=50
+dsp:uart_write data="t 0 16\r"
+dsp:uart_expect sentinel="tx queued" timeout_ms=2000
+delay ms=20
+mark tag=read
+dsp:qspi_read n=16 clk_div=8 mode=1 chunk_size=16
+mark tag=read_end
+delay ms=100
+scope:capture chans="C1,C2,C3,C4"
+dsp:uart_close

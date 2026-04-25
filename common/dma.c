@@ -225,6 +225,42 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
    MMR(base + OFF_DMA_CFG)        = cfg;
 }
 
+void dma_pingpong_tx_config(const enum dma_channel ch, const void *buf_a,
+                            const void *buf_b, uint32_t half_words,
+                            struct dma_dscl desc[2])
+{
+   uint32_t base = dma_base(ch);
+
+   // TX version of dma_pingpong_rx_config: chain A -> B -> A
+   // forever, INT fires at each XCNT-zero so the CPU can refill
+   // the just-drained half.  WNR is cleared: direction is
+   // memory -> peripheral.
+   uint32_t cfg = (DMA_NDSIZE_5 << POS_DMA_CFG_NDSIZE) |
+                  (DMA_FLOW_DSCL << POS_DMA_CFG_FLOW) |
+                  (DMA_INT_ON_XCNT0 << POS_DMA_CFG_INT) |
+                  (DMA_MSIZE_4B << POS_DMA_CFG_MSIZE) |
+                  (DMA_PSIZE_4B << POS_DMA_CFG_PSIZE) | BIT_DMA_CFG_EN;
+
+   desc[0].next      = to_dma_addr(&desc[1]);
+   desc[0].addrstart = to_dma_addr(buf_a);
+   desc[0].cfg       = cfg;
+   desc[0].xcnt      = half_words;
+   desc[0].xmod      = 4U;
+
+   desc[1].next      = to_dma_addr(&desc[0]);
+   desc[1].addrstart = to_dma_addr(buf_b);
+   desc[1].cfg       = cfg;
+   desc[1].xcnt      = half_words;
+   desc[1].xmod      = 4U;
+
+   MMR(base + OFF_DMA_CFG)        = 0U;
+   MMR(base + OFF_DMA_STAT)       = BIT_DMA_STAT_IRQDONE;
+   MMR(base + OFF_DMA_DSCPTR_NXT) = to_dma_addr(&desc[0]);
+   MMR(base + OFF_DMA_YCNT)       = 0U;
+   MMR(base + OFF_DMA_YMOD)       = 0U;
+   MMR(base + OFF_DMA_CFG)        = cfg;
+}
+
 void dma_wait_idle(const enum dma_channel ch)
 {
    uint32_t addr = dma_base(ch) + OFF_DMA_STAT;

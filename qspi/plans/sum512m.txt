@@ -1,0 +1,16 @@
+# 512 MiB plugin-generated PRBS, 4B prefix, chunk=65526, DIV_2 quad.
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=s
+dsp:qspi_write_prbs seed=0xC0FFEE n=536870912 clk_div=2 mode=4 chunk_size=65526 prefix=@safety4.bin
+mark tag=e
+delay ms=500
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=60000
+dsp:uart_close

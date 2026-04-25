@@ -1,0 +1,15 @@
+dsp:reset
+dsp:uart_open
+dsp:boot ldr=@main.ldr
+delay ms=500
+dsp:uart_write data="m4\r"
+delay ms=50
+dsp:uart_write data="?\r"
+delay ms=200
+mark tag=s
+dsp:qspi_write_prbs seed=__SEED__ n=65528 clk_div=8 mode=4 chunk_size=65528 prefix=@safety2.bin
+mark tag=e
+delay ms=100
+dsp:uart_write data="i\r"
+dsp:uart_expect sentinel="sum=0x" timeout_ms=5000
+dsp:uart_close

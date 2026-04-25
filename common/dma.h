@@ -150,6 +150,21 @@ void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
                             const void *buf_b, uint32_t half_words,
                             struct dma_dscl desc[2]);
 
+// Configure a channel for two-descriptor ping-pong TX (memory
+// -> peripheral).  Same shape as dma_pingpong_rx_config but
+// without CFG.WNR so data flows from the two half-buffers into
+// the peripheral's TFIFO.  Caller must pre-fill both halves
+// before enabling SPI transmit; subsequent refills happen on
+// each XCNT-zero IRQ latch (poll dma_wrap_check).
+//
+// ch          : which DMA channel (peripheral TX).
+// buf_a, buf_b: core-side pointers to the two half-buffers.
+// half_words  : 32-bit words per half.
+// desc        : storage for the two descriptors.
+void dma_pingpong_tx_config(const enum dma_channel ch, const void *buf_a,
+                            const void *buf_b, uint32_t half_words,
+                            struct dma_dscl desc[2]);
+
 // Poll DMA_STAT.RUN until the channel reports idle/stop state
 // (value 0).  Call after dma_disable() and before reconfiguring the
 // channel, so any outstanding memory transactions finish before the

@@ -49,4 +49,12 @@ int mcp23017_set_direction(const struct mcp23017_target *tgt, uint32_t dir);
 //   returns: 0 on success, -1 on I2C error.
 int mcp23017_write_gpio(const struct mcp23017_target *tgt, uint32_t val);
 
+// Read the live level of all 8 pins on the target port.  For
+// output pins the result reflects the last value written (plus
+// any external override); for input pins it reflects the pad.
+//   tgt:  chip address and port selection.
+//   out:  receives the 8-bit port value (0..255).
+//   returns: 0 on success, -1 on I2C error.
+int mcp23017_read_gpio(const struct mcp23017_target *tgt, uint32_t *out);
+
 #endif // MCP23017_H
