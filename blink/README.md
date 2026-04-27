@@ -16,8 +16,8 @@ Connect USB-C cable to the QSPI connector `P2` on the EZLITE board.
 Boot the DSP and observe the LED 4, 6, 7 blinking pattern. Make sure the red
 LED1 is not illuminated (which would mean `SYS_FAULT` is asserted.).
 
-For automated test: connect LED4 to scope C1 and LED1 to scope C2. The board
-must be modified to enable automated reset (connect R172 to S3).
+For automated test: connect LED4 to scope C1 and LED1 to scope C2. The EZLITE
+board must be modified to enable automated reset (connect R172 to S3).
 
 ### Automated Test
 

@@ -10,11 +10,11 @@
 //
 // P13 hosts DAI1 pin buffers (the DAI0 slots on P13 are not
 // bonded on either package so they are omitted). P14 hosts
-// PORTA/PORTB signals; PA06/PA07 carry UART0 TX/RX.  They are
-// included in the scan but UART0 is silenced during the probe
-// phase (pins taken away from their peripheral alt) and re-
-// enabled via pinmux_uart0() before any printf happens again.
-// DAI1_PIN11/PIN12 appear on P13.22/P13.24 but are only
+// PORTA/PORTB signals; PA06/PA07 carry UART0 TX/RX and are
+// deliberately excluded from the scan so the diagnostic UART
+// is never disturbed -- this also keeps the report stream
+// clean instead of having a torn-up window during the probe
+// phase. DAI1_PIN11/PIN12 appear on P13.22/P13.24 but are only
 // bonded on the 400-ball BGA package, so they are omitted to
 // stay safe on 120-lead LQFP.
 //
@@ -24,13 +24,16 @@
 // still appear because the target tracks the driven source
 // deterministically in both states.
 //
-// Report runs once at boot and again every time a 't' arrives
-// on UART0.
+// Report runs once at boot. After that the demo accepts a few
+// single-character commands on UART0:
+//   t           re-run the connectivity scan
+//   ?  or  h    print the command list and the pin index table
+//   b<idx>      blink a single pin (idx is one hex-ish nibble:
+//               '0'..'9' for pins 0..9, 'a'..'n' for pins 10..23)
 
 #include "board.h"
 #include "clocks.h"
 #include "gpio.h"
-#include "pinmux.h"
 #include "timer.h"
 #include "uart.h"
 #include <assert.h>
@@ -90,11 +93,8 @@ static const struct pin_entry pins[] = {
     {"P13.38", "DAI1_PIN19", GPIO_DAI1_19, GPIO_BANK_DAI1,  18U},
     {"P13.40", "DAI1_PIN20", GPIO_DAI1_20, GPIO_BANK_DAI1,  19U},
 
-    // P14 -- PORTA/PORTB.  PA06/PA07 carry UART0 TX/RX; the
-    // scan silences UART0 while driving them and restores it
-    // (via pinmux_uart0) before printing any report.
-    {"P14.02", "PA_06",      GPIO_PA06,    GPIO_BANK_PORTA, 6U },
-    {"P14.04", "PA_07",      GPIO_PA07,    GPIO_BANK_PORTA, 7U },
+    // P14 -- PORTA/PORTB.  PA06/PA07 carry UART0 TX/RX and are
+    // intentionally absent from this table.
     {"P14.06", "PA_08",      GPIO_PA08,    GPIO_BANK_PORTA, 8U },
     {"P14.08", "PA_09",      GPIO_PA09,    GPIO_BANK_PORTA, 9U },
     {"P14.10", "PB_05",      GPIO_PB05,    GPIO_BANK_PORTB, 5U },
@@ -107,7 +107,7 @@ static const struct pin_entry pins[] = {
     {"P14.27", "PA_15",      GPIO_PA15,    GPIO_BANK_PORTA, 15U},
 };
 
-#define N_PINS 24U
+#define N_PINS 22U
 
 static_assert(sizeof(pins) / sizeof(pins[0]) == N_PINS,
               "N_PINS out of sync with pin table");
@@ -271,6 +271,68 @@ static void report_weird(const bool floating[N_PINS])
    }
 }
 
+// Pin indices encode as one ASCII char: '0'..'9' for 0..9 then
+// 'a'.. for 10.. (case-insensitive on parse).
+#define IDX_DIGIT_SPAN 10U
+
+static char idx_to_char(uint32_t idx)
+{
+   return (char)(idx < IDX_DIGIT_SPAN ? ('0' + idx)
+                                      : ('a' + (idx - IDX_DIGIT_SPAN)));
+}
+
+static int parse_pin_idx(int c)
+{
+   if (c >= '0' && c <= '9')
+      return c - '0';
+   if (c >= 'a' && c <= 'z')
+      return (int)IDX_DIGIT_SPAN + (c - 'a');
+   if (c >= 'A' && c <= 'Z')
+      return (int)IDX_DIGIT_SPAN + (c - 'A');
+   return -1;
+}
+
+#define BLINK_HALF_MS 250U
+#define BLINK_TOGGLES 10U
+
+static void blink_pin(uint32_t idx)
+{
+   if (idx >= N_PINS) {
+      diag_puts("bad pin idx\r\n");
+      return;
+   }
+   diag_puts("blinking ");
+   uart_putc(idx_to_char(idx));
+   diag_puts(" = ");
+   print_pin(idx);
+   diag_puts("\r\n");
+   gpio_make_output(pins[idx].pin);
+   for (uint32_t i = 0; i < BLINK_TOGGLES; i++) {
+      gpio_write(pins[idx].pin, true);
+      delay_ms(BLINK_HALF_MS);
+      gpio_write(pins[idx].pin, false);
+      delay_ms(BLINK_HALF_MS);
+   }
+   gpio_make_input(pins[idx].pin);
+   diag_puts("blink done\r\n");
+}
+
+static void print_help(void)
+{
+   diag_puts("commands:\r\n");
+   diag_puts("  t        run connectivity scan\r\n");
+   diag_puts("  ?  / h   print this help\r\n");
+   diag_puts("  b<idx>   blink one pin for a few seconds\r\n");
+   diag_puts("pin index table:\r\n");
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      diag_puts("  ");
+      uart_putc(idx_to_char(i));
+      diag_puts("  ");
+      print_pin(i);
+      diag_puts("\r\n");
+   }
+}
+
 static void run_test(uint32_t cycle)
 {
    diag_puts("=== scan ");
@@ -278,23 +340,25 @@ static void run_test(uint32_t cycle)
    diag_puts(" ===\r\n");
 
    static bool floating[N_PINS];
-   // Probe phase drives PA_06/PA_07 directly; that steals them
-   // from UART0 so printf is silent until pinmux_uart0() restores
-   // them.  Do all probes first, then restore UART, then report.
    measure_floating(floating);
    for (uint32_t i = 0; i < N_PINS; i++) {
       probe_source(i);
    }
-   // Leave every probed pin parked as input and hand PA_06/PA_07
-   // back to UART0.
+   // Leave every probed pin parked as input.
    for (uint32_t i = 0; i < N_PINS; i++) {
       gpio_make_input(pins[i].pin);
    }
-   pinmux_uart0();
 
    report_pairs();
    report_one_way(floating);
    report_weird(floating);
+
+   // Post-restore marker: UART is clean by this point so the line is
+   // safe to grep, unlike the opening "=== scan N ===" banner whose
+   // first byte rides through the probe phase.
+   diag_puts("=== scan ");
+   diag_dec(cycle);
+   diag_puts(" done ===\r\n");
 }
 
 int main(void)
@@ -314,8 +378,24 @@ int main(void)
 
    for (;;) {
       int c = uart_try_getc();
+      if (c < 0) {
+         continue;
+      }
       if (c == 't' || c == 'T') {
          run_test(cycle++);
+      } else if (c == '?' || c == 'h' || c == 'H') {
+         print_help();
+      } else if (c == 'b' || c == 'B') {
+         int arg = -1;
+         while (arg < 0) {
+            arg = uart_try_getc();
+         }
+         int idx = parse_pin_idx(arg);
+         if (idx < 0) {
+            diag_puts("bad pin idx\r\n");
+         } else {
+            blink_pin((uint32_t)idx);
+         }
       }
    }
 }

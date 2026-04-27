@@ -19,8 +19,11 @@ UART_LOG = "streams/dsp.uart.bin"
 # first report line emitted by report_pairs() and is the strongest
 # unambiguous marker that the scan finished and UART came back up.
 REPORT_MARKER = "connected:"
+HELP_MARKER = "commands:"
+SCAN_DONE_MARKER = " done ==="
 MIN_LOG_BYTES = 64
 MIN_REPORT_LINES = 5
+MIN_SCANS = 2
 
 
 def _read_uart():
@@ -73,6 +76,33 @@ def check_scan_completed():
     return True
 
 
+def check_help_present():
+    text = _read_uart()
+    if HELP_MARKER not in text:
+        sys.stderr.write(
+            f"help marker {HELP_MARKER!r} not in uart log\n")
+        _dump_uart()
+        return False
+    return True
+
+
+def check_second_scan():
+    """Count `=== scan N done ===` markers. The boot scan emits one;
+    the `t` command kicks a second run_test that emits another. Two
+    distinct done-markers prove the trigger command actually drove a
+    second scan."""
+    text = _read_uart()
+    n = sum(1 for line in text.splitlines()
+            if SCAN_DONE_MARKER in line)
+    v._set_info(f"{n} scan done markers")
+    if n < MIN_SCANS:
+        sys.stderr.write(
+            f"only {n} done markers (need >= {MIN_SCANS})\n")
+        _dump_uart()
+        return False
+    return True
+
+
 DISPATCH = {
     "Check `test_serv` had no errors":
         v.check_no_errors,
@@ -82,6 +112,10 @@ DISPATCH = {
         check_uart_scan_present,
     "Check scan completed":
         check_scan_completed,
+    "Check help output present":
+        check_help_present,
+    "Check trigger command runs second scan":
+        check_second_scan,
 }
 
 

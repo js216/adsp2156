@@ -28,10 +28,11 @@ Each example defines a `verify.py` script which makes use of the bullet points
 following each automated test description to check that the returned test
 artifacts pass the test criteria.
 
-With the test server running, each example can be verified in one step:
+With the test server running, each example can be verified in one step. For
+example:
 
     cd blink
-    python3 $SERV_PATH/test_serv/run_md.py
+    python3 $TEST_SERV/run_md.py
 
 ### Author
 

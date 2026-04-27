@@ -164,6 +164,16 @@ def _run_one(dispatch, key):
         return False
 
 
+def _warn_unused(dispatch, used_keys):
+    unused = sorted(set(dispatch.keys()) - used_keys)
+    if unused:
+        sys.stderr.write(
+            f"{BOLD}WARNING{RESET}: DISPATCH keys defined but not "
+            f"referenced by any README bullet:\n")
+        for k in unused:
+            sys.stderr.write(f"  {k}\n")
+
+
 def _sweep(dispatch):
     checks_path = os.path.join(OUT_DIR, CHECKS_JSON)
     try:
@@ -172,6 +182,12 @@ def _sweep(dispatch):
     except OSError as e:
         sys.stderr.write(f"cannot read {checks_path}: {e}\n")
         return 1
+
+    used = set()
+    for bullets in checks_map.values():
+        for b in bullets:
+            used.add(b.strip())
+    _warn_unused(dispatch, used)
 
     fails = 0
     total = 0

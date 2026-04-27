@@ -19,8 +19,8 @@ Boot the DSP. The UART line should print `uart demo starting` followed by an
 incrementing hex counter, one line per second. Make sure red LED1 is off (no
 `SYS_FAULT`).
 
-For automated test: connect LED1 to scope C2. The board must be modified to
-enable automated reset (connect R172 to S3).
+For automated test: connect LED1 to scope C2. The EZLITE board must be modified
+to enable automated reset (connect R172 to S3).
 
 ### Automated Test
 
