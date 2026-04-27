@@ -1,9 +1,0 @@
-# Boot blink firmware; capture scope traces after a settle time.
-# Three LEDs on MCP23017 GPA0..GPA2 should show 1.11 Hz 50%-duty
-# waveforms with 120-degree phase offsets.
-dsp:reset
-dsp:uart_open
-dsp:boot ldr=@main.ldr
-delay ms=3000
-scope:capture chans="C1,C2,C3,C4"
-dsp:uart_close

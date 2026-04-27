@@ -8,3 +8,5 @@
 
 .claude
 build
+test_out
+__pycache__
