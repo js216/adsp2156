@@ -13,4 +13,6 @@ OBJ = \
   mcp23017.doj \
   board.doj
 
+CFLAGS_EXTRA += -DUSE_INTERNAL
+
 include ../common/build.mk

@@ -1,5 +1,0 @@
-dsp:reset
-dsp:uart_open
-dsp:boot ldr=@sport_dma.ldr
-delay ms=20000
-dsp:uart_close

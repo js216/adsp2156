@@ -1,3 +1,0 @@
-bench_mcu:identify
-bench_mcu:send data="h\r"
-bench_mcu:send data="help\r"
