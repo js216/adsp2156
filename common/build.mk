@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# build.mk --- TODO: description
+# Copyright (c) 2026 Jakob Kastelic
 PROC ?= ADSP-21569
 CC   = cc21k
 ASM  = easm21k
