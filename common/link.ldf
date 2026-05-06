@@ -17,7 +17,7 @@ MEMORY
    mem_iv_code   { TYPE(PM RAM) START(0x00090000) END(0x000900a7) WIDTH(48) }
    mem_l1_block0 { TYPE(BW RAM) START(0x002403f0) END(0x0026ffff) WIDTH(8)  }
    mem_l1_block1 { TYPE(BW RAM) START(0x002c0000) END(0x002ebfff) WIDTH(8)  }
-   mem_l1_block2 { TYPE(BW RAM) START(0x00300000) END(0x0031bfff) WIDTH(8)  }
+   mem_l1_block2 { TYPE(BW RAM) START(0x00300000) END(0x0031ffff) WIDTH(8)  }
    mem_l2        { TYPE(BW RAM) START(0x20000000) END(0x200f9fff) WIDTH(8)  }
 }
 
@@ -40,6 +40,25 @@ PROCESSOR p0
       {
          RESERVE(ldf_stack_space, ldf_stack_length = 8192, 8)
       } > mem_l1_block0
+
+      // Cold/generated helper code can execute from block0 below the
+      // high-end stack reserve. selcc uses this for selected generated
+      // csmith support helpers so large cases do not consume all of L1
+      // block2, while still staying within the 24-bit direct-call range
+      // used by CJUMP.
+      block0_sw_code SW
+      {
+         INPUT_SECTION_ALIGN(2)
+         FILL(0x1)
+         INPUT_SECTIONS( $OBJECTS(seg_l1_block0_swco seg_l1_block0_pmco) )
+      } > mem_l1_block0
+
+      block1_sw_code SW
+      {
+         INPUT_SECTION_ALIGN(2)
+         FILL(0x1)
+         INPUT_SECTIONS( $OBJECTS(seg_l1_block1_swco seg_l1_block1_pmco) )
+      } > mem_l1_block1
 
       // Read-only string literals and other initialised data.
       block1_data BW
