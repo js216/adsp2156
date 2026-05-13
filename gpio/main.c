@@ -30,6 +30,15 @@
 //   ?  or  h    print the command list and the pin index table
 //   b<idx>      blink a single pin (idx is one hex-ish nibble:
 //               '0'..'9' for pins 0..9, 'a'..'n' for pins 10..23)
+//
+// Bench connectivity test commands (no <idx> argument; each one
+// references an internal cursor maintained by `R`/`Z`):
+//   N           drive cursor pin as output high
+//   n           drive cursor pin as output low (same pin as `N`)
+//   R           park cursor pin back as input and advance cursor
+//   Z           reset cursor to 0 and park every pin as input
+//   Q           emit "Q=<6 hex digits>\r\n" snapshot of all 22 pins
+//               (LSB = pin 0; bit i = 1 means pin i reads high)
 
 #include "board.h"
 #include "clocks.h"
@@ -323,6 +332,8 @@ static void print_help(void)
    diag_puts("  t        run connectivity scan\r\n");
    diag_puts("  ?  / h   print this help\r\n");
    diag_puts("  b<idx>   blink one pin for a few seconds\r\n");
+   diag_puts("  N/n/R/Z  bench cursor: drive hi / lo / release+advance / reset\r\n");
+   diag_puts("  Q        emit pin-state hex snapshot\r\n");
    diag_puts("pin index table:\r\n");
    for (uint32_t i = 0; i < N_PINS; i++) {
       diag_puts("  ");
@@ -330,6 +341,57 @@ static void print_help(void)
       diag_puts("  ");
       print_pin(i);
       diag_puts("\r\n");
+   }
+}
+
+// ---- bench-driven per-pin cursor --------------------------------
+//
+// The mission file iterates through 16 pins via run.py's `Foreach
+// count(16)` loop and sends the same fixed-text command sequence
+// each iteration; the firmware therefore needs an internal cursor
+// to know which pin a context-free `N`/`n`/`R` byte refers to.
+// The cursor is initialised to 0 by `Z` and advanced one position
+// by every `R`. Both ends of the bench fixture (DSP and FPGA)
+// implement the same protocol so the plan never has to name a pin
+// directly.
+
+static uint32_t cursor;
+
+static void emit_pin_snapshot(void)
+{
+   // Force every pin back to input before sampling so that a Q
+   // arriving while some pin (the cursor pin in Phase A, a stale
+   // boot-scan source, etc.) is still configured as an output
+   // does not just read back its own driven data register. The
+   // call is idempotent on pins already in input mode -- it
+   // re-asserts INEN / PADS_DAI_IE and clears DIR / PBEN -- so
+   // running it on every Q has no side effects when the caller
+   // has already parked everything. The crucial property is that
+   // the value emitted reflects the EXTERNAL pin level, never
+   // the cached output drive.
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      gpio_make_input(pins[i].pin);
+   }
+   uint32_t banks[GPIO_BANK_COUNT];
+   snapshot(banks);
+   uint32_t v = 0U;
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      if (sample_bit(banks, i)) {
+         v |= (1U << i);
+      }
+   }
+   diag_puts("Q=");
+   for (int nib = 5; nib >= 0; nib--) {
+      uint32_t n = (v >> (nib * 4)) & 0xFU;
+      uart_putc((char)(n < 10 ? ('0' + n) : ('a' + (n - 10))));
+   }
+   diag_puts("\r\n");
+}
+
+static void park_all_inputs(void)
+{
+   for (uint32_t i = 0; i < N_PINS; i++) {
+      gpio_make_input(pins[i].pin);
    }
 }
 
@@ -383,7 +445,7 @@ int main(void)
       }
       if (c == 't' || c == 'T') {
          run_test(cycle++);
-      } else if (c == '?' || c == 'h' || c == 'H') {
+      } else if (c == '?' || c == 'h') {
          print_help();
       } else if (c == 'b' || c == 'B') {
          int arg = -1;
@@ -396,6 +458,46 @@ int main(void)
          } else {
             blink_pin((uint32_t)idx);
          }
+      } else if (c == 'N') {
+         if (cursor < N_PINS) {
+            gpio_make_output(pins[cursor].pin);
+            gpio_write(pins[cursor].pin, true);
+         }
+         // Echo cursor + self-readback of the driven bit so the
+         // bench can tell whether the pad actually reaches HIGH
+         // from the DSP's own perspective; if the FPGA disagrees,
+         // the discrepancy is downstream of the DSP drive.
+         diag_puts("N");
+         uart_putc(idx_to_char(cursor < N_PINS ? cursor : 0U));
+         if (cursor < N_PINS) {
+            uint32_t banks[GPIO_BANK_COUNT];
+            snapshot(banks);
+            diag_puts(sample_bit(banks, cursor) ? "=1" : "=0");
+         }
+         diag_puts("\r\n");
+      } else if (c == 'n') {
+         if (cursor < N_PINS) {
+            gpio_make_output(pins[cursor].pin);
+            gpio_write(pins[cursor].pin, false);
+         }
+         diag_puts("n");
+         uart_putc(idx_to_char(cursor < N_PINS ? cursor : 0U));
+         if (cursor < N_PINS) {
+            uint32_t banks[GPIO_BANK_COUNT];
+            snapshot(banks);
+            diag_puts(sample_bit(banks, cursor) ? "=1" : "=0");
+         }
+         diag_puts("\r\n");
+      } else if (c == 'R') {
+         if (cursor < N_PINS) {
+            gpio_make_input(pins[cursor].pin);
+         }
+         cursor++;
+      } else if (c == 'Z') {
+         park_all_inputs();
+         cursor = 0U;
+      } else if (c == 'Q') {
+         emit_pin_snapshot();
       }
    }
 }
