@@ -107,6 +107,11 @@ bool sport_rx_ready(const enum sport_id id, const enum sport_half half)
    return dxspri(id, half) != 0U; // not empty
 }
 
+bool sport_tx_ready(const enum sport_id id, const enum sport_half half)
+{
+   return dxspri(id, half) != 3U; // not full
+}
+
 void sport_write_raw(const enum sport_id id, const enum sport_half half,
                      const uint32_t word)
 {
@@ -296,8 +301,8 @@ static const struct sport_pin_enable pin_enables[SPORT_ID_COUNT] = {
     {0U,             0U, 0U,  0U },
     // SPORT3: PB19/PB20 only (2 data, no dedicated CLK/FS pin)
     {0U,             0U, 0U,  0U },
-    // DAI1 SPORT4..7 (same layout as 0..3 but on DAI1).
-    {REG_DAI1_PBEN0, 0U, 12U, 18U},
+    // SPORT4A bench wiring: PB01=AD0, PB02=ACLK, PB04=AFS.
+    {REG_DAI1_PBEN0, 0U, 6U,  18U},
     {0U,             0U, 0U,  0U },
     {0U,             0U, 0U,  0U },
     {0U,             0U, 0U,  0U },
@@ -314,10 +319,64 @@ void sport_enable_external_pins(const enum sport_id id)
 
    uint32_t mask = (uint32_t)BITS_DAI_PBEN_FIELD_M;
    uint32_t v    = MMR(pe->pben_reg);
-   v &= ~((mask << pe->ad0_bit) | (mask << pe->aclk_bit) |
-          (mask << pe->afs_bit));
-   v |= ((uint32_t)SRU_F_HIGH << pe->ad0_bit) |
-        ((uint32_t)SRU_F_HIGH << pe->aclk_bit) |
-        ((uint32_t)SRU_F_HIGH << pe->afs_bit);
-   MMR(pe->pben_reg) = v;
+   if (id == SPORT_ID_4) {
+      // Explicitly source the SPORT4A TX signals onto the DAI1 pins.
+      // Reset defaults are not a contract, and the FPGA loopback test
+      // must fail if these off-chip pins are not actually driven.
+      sru_set_field(REG_DAI1_PIN0,
+                    (struct reg_field){0U, BITS_DAI_PIN_FIELD_M},
+                    0x14U); // DAI1 PB01 <- SPT4_AD0_O
+      sru_set_field(REG_DAI1_PIN0,
+                    (struct reg_field){7U, BITS_DAI_PIN_FIELD_M},
+                    0x20U); // DAI1 PB02 <- SPT4_ACLK_O
+      sru_set_field(REG_DAI1_PIN0,
+                    (struct reg_field){21U, BITS_DAI_PIN_FIELD_M},
+                    0x26U); // DAI1 PB04 <- SPT4_AFS_O
+      sru_set_field(REG_DAI1_PBEN0,
+                    (struct reg_field){0U, BITS_DAI_PBEN_FIELD_M},
+                    0x0AU); // DAI1 PB01 output enabled by SPT4_AD0_PBEN_O
+      sru_set_field(REG_DAI1_PBEN0,
+                    (struct reg_field){6U, BITS_DAI_PBEN_FIELD_M},
+                    0x08U); // DAI1 PB02 output enabled by SPT4_ACLK_PBEN_O
+      sru_set_field(REG_DAI1_PBEN0,
+                    (struct reg_field){18U, BITS_DAI_PBEN_FIELD_M},
+                    0x09U); // DAI1 PB04 output enabled by SPT4_AFS_PBEN_O
+   } else {
+      v &= ~((mask << pe->ad0_bit) | (mask << pe->aclk_bit) |
+             (mask << pe->afs_bit));
+      v |= ((uint32_t)SRU_F_HIGH << pe->ad0_bit) |
+           ((uint32_t)SRU_F_HIGH << pe->aclk_bit) |
+           ((uint32_t)SRU_F_HIGH << pe->afs_bit);
+      MMR(pe->pben_reg) = v;
+   }
+}
+
+void sport_install_external_loopback(const enum sport_id id)
+{
+   // Only SPORT4's pin source codes are tabulated here; extend as
+   // needed for SPORT0..3 / 5 / 6.
+   assert(id == SPORT_ID_4);
+   // SPORT4 half-A drives PB01/PB02/PB04; half-B receives from
+   // PB05/PB07/PB08 (matching pair). Group-A code 0x06 = DAI1_PB07_O,
+   // group-C code 0x07 = DAI1_PB08_O, group-B code 0x04 = DAI1_PB05_O.
+   // Force the return pins to inputs so an FPGA or jumper is the only
+   // possible source for SPORT4B.
+   sru_set_field(REG_DAI1_PBEN0,
+                 (struct reg_field){24U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // DAI1 PB05 input
+   sru_set_field(REG_DAI1_PBEN1,
+                 (struct reg_field){6U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // DAI1 PB07 input
+   sru_set_field(REG_DAI1_PBEN1,
+                 (struct reg_field){12U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // DAI1 PB08 input
+   sru_set_field(REG_DAI1_CLK0,
+                 (struct reg_field){5U, BITS_DAI_CLK_FIELD_M},
+                 0x06U);
+   sru_set_field(REG_DAI1_FS0,
+                 (struct reg_field){5U, BITS_DAI_FS_FIELD_M},
+                 0x07U);
+   sru_set_field(REG_DAI1_DAT0,
+                 (struct reg_field){12U, BITS_DAI_DAT_FIELD_M},
+                 0x04U);
 }

@@ -98,6 +98,9 @@ uint32_t sport_read_raw(const enum sport_id id, const enum sport_half half);
 //   returns: true if a word can be read.
 bool sport_rx_ready(const enum sport_id id, const enum sport_half half);
 
+// True when the primary TX buffer is not full and can accept a word.
+bool sport_tx_ready(const enum sport_id id, const enum sport_half half);
+
 // Install a purely-internal loopback route that feeds half A's
 // clock, frame sync and primary data output back into half B's
 // corresponding inputs for the given SPORT. No DAI pins leave
@@ -128,16 +131,26 @@ void sport_clear_errors(const enum sport_id id, const enum sport_half half);
 //   returns: true if TX underflow or RX overflow has occurred.
 bool sport_has_error(const enum sport_id id, const enum sport_half half);
 
-// Force the DAI pin-buffer output enables for the three
-// default half-A pins of the given SPORT (AD0, ACLK, AFS) to
-// static HIGH and enable the DAI pad input buffers. This is
-// needed for external loopback through off-chip jumpers
-// because the SPORT's own PBEN_O signals do not automatically
-// assert in plain DSP-serial mode.
+// Force the DAI pin-buffer output enables for the three default
+// half-A pins of the given SPORT (AD0, ACLK, AFS) to static HIGH
+// and enable the DAI pad input buffers. For SPORT4, also explicitly
+// routes SPT4_AD0_O, SPT4_ACLK_O and SPT4_AFS_O onto DAI1
+// PB01/PB02/PB04. This is needed for external loopback through
+// off-chip jumpers because the SPORT's own PBEN_O signals do not
+// automatically assert in plain DSP-serial mode.
 //
 //   id: which SPORT module to enable. The default pin-to-
-//       SPORT mapping is used (e.g. SPORT4 = PB01/PB03/PB04
+//       SPORT mapping is used (e.g. SPORT4 = PB01/PB02/PB04
 //       on DAI1).
 void sport_enable_external_pins(const enum sport_id id);
+
+// Route the half-A pin-buffer INPUTS back into half-B's clock,
+// frame-sync and data inputs through the DAI SRU. Required when
+// using a true off-chip jumper loopback (or an FPGA pass-through)
+// so that half-B can see what half-A is transmitting on the pins.
+// Defined for SPORT4 only (others would need separate tables).
+//
+//   id: SPORT_ID_4 only; asserts otherwise.
+void sport_install_external_loopback(const enum sport_id id);
 
 #endif // SPORT_H

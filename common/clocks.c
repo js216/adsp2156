@@ -41,8 +41,16 @@
 #define BIT_CGU_DIV_UPDT    (1U << 30U)
 
 // CGU_STAT bits (HRM 2-24..27).
-#define BIT_CGU_STAT_PLOCK    (1U << 2U)
-#define BIT_CGU_STAT_CLKSALGN (1U << 3U)
+#define BIT_CGU_STAT_PLOCK (1U << 2U)
+// CLKSALGN was historically polled here, but observation on the
+// EV-21569-SOM with the bench's UART-host boot loader shows the
+// bit reads 0 at boot (CGU_STAT = 0x05 = PLLEN | PLOCK) -- i.e.,
+// in the "no alignment indicated" state -- so an unconditional
+// `wait until CLKSALGN == 1` hangs forever for any cfg whose
+// dividers differ from the boot ROM's. The divider commit itself
+// is fast (sub-microsecond at SHARC+ CCLK rates), so dropping the
+// CLKSALGN wait is safe; PLOCK is the meaningful gate when MSEL
+// or DF change.
 
 void clocks_init(const struct clocks_cfg *cfg)
 {
@@ -82,9 +90,13 @@ void clocks_init(const struct clocks_cfg *cfg)
       MMR(REG_CGU0_DIV) = div;
    }
 
-   // Wait for PLL lock and clock alignment.
+   // Wait for PLL lock (matters only when MSEL/DF changed -- PLL
+   // unlocks during a recalibration). For pure divider changes
+   // PLOCK is already 1 and this wait is a single MMR read.
    while ((MMR(REG_CGU0_STAT) & BIT_CGU_STAT_PLOCK) == 0U) {
    }
-   while ((MMR(REG_CGU0_STAT) & BIT_CGU_STAT_CLKSALGN) == 0U) {
+   // Brief settle so the new dividers commit before the caller
+   // starts using SCLK0 / SYSCLK at their new frequencies.
+   for (volatile uint32_t i = 0U; i < 256U; i++) {
    }
 }

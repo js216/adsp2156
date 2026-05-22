@@ -2,9 +2,13 @@
 # build.mk --- TODO: description
 # Copyright (c) 2026 Jakob Kastelic
 PROC ?= ADSP-21569
-CC   = cc21k
-ASM  = easm21k
-ELFL = elfloader
+CCES_QEMU ?= /opt/cces-qemu
+CC21K     ?= $(CCES_QEMU)/cc21k
+EASM21K   ?= $(CCES_QEMU)/easm21k
+ELFLOADER ?= $(CCES_QEMU)/elfloader
+CC   = $(CC21K)
+ASM  = $(EASM21K)
+ELFL = $(ELFLOADER)
 
 LIBC     ?= ../../selache/libsel
 LIBC_INC = $(LIBC)/include

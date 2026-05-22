@@ -51,6 +51,33 @@ struct clocks_cfg {
        .osel     = 40U,                                                        \
    }
 
+// SCLK0 = 62.5 MHz configuration. Used by SPORT4 missions that
+// need to hit the datasheet bit-clock cap on the
+// internal-clock-receive path (fSPTCLKEXT RX = 62.5 MHz) and the
+// internal-clock-transmit path (fSPTCLKPROG TX = 62.5 MHz) with
+// CLKDIV=0:
+//   CLKIN = 25 MHz, MSEL = 60, DF = 0
+//   PLLCLK = 1500 MHz, CCLK = 750 MHz, SYSCLK = 375 MHz (unchanged
+//   from default), SCLK0 = 62.5 MHz, SCLK1 = 187.5 MHz (unchanged).
+// Only S0SEL differs from CLOCKS_CFG_DEFAULT (4 -> 6) so SYSCLK
+// and every other domain stay at their boot-ROM values, minimising
+// glitches at reprogram time.
+// HRM 23-3: SPORT_ACLK = SCLK0 / (CLKDIV + 1). With CLKDIV=0,
+// bit_clk = SCLK0 = 62.5 MHz exactly.
+// HRM 23-3 constraint fSYSCLK = N * fSCLK0, N in {2,4,6}: 375/62.5 = 6. OK.
+#define CLOCKS_CFG_SCLK0_62MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 60U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 2U,                                                         \
+       .syssel   = 4U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
 // Program CGU0 to the given configuration and wait for PLL
 // lock. The caller is responsible for ensuring BOARD_SCLK_HZ
 // matches the SCLK0 that `cfg` produces; the function does
