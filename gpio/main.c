@@ -114,9 +114,41 @@ static const struct pin_entry pins[] = {
     {"P14.20", "PB_10",      GPIO_PB10,    GPIO_BANK_PORTB, 10U},
     {"P14.25", "PA_14",      GPIO_PA14,    GPIO_BANK_PORTA, 14U},
     {"P14.27", "PA_15",      GPIO_PA15,    GPIO_BANK_PORTA, 15U},
+
+    // DAI0 pin buffers -- jumpered to the FPGA per the intercon
+    // netlist (DAI0_PIN01..12,19,20).  DAI0 bank; stat bit = pin#-1
+    // for 1..12, and 18/19 for PIN19/PIN20 (gap at bits 12..17).
+    {"DAI0.01", "DAI0_PIN01", GPIO_DAI0_01, GPIO_BANK_DAI0, 0U },
+    {"DAI0.02", "DAI0_PIN02", GPIO_DAI0_02, GPIO_BANK_DAI0, 1U },
+    {"DAI0.03", "DAI0_PIN03", GPIO_DAI0_03, GPIO_BANK_DAI0, 2U },
+    {"DAI0.04", "DAI0_PIN04", GPIO_DAI0_04, GPIO_BANK_DAI0, 3U },
+    {"DAI0.05", "DAI0_PIN05", GPIO_DAI0_05, GPIO_BANK_DAI0, 4U },
+    {"DAI0.06", "DAI0_PIN06", GPIO_DAI0_06, GPIO_BANK_DAI0, 5U },
+    {"DAI0.07", "DAI0_PIN07", GPIO_DAI0_07, GPIO_BANK_DAI0, 6U },
+    {"DAI0.08", "DAI0_PIN08", GPIO_DAI0_08, GPIO_BANK_DAI0, 7U },
+    {"DAI0.09", "DAI0_PIN09", GPIO_DAI0_09, GPIO_BANK_DAI0, 8U },
+    {"DAI0.10", "DAI0_PIN10", GPIO_DAI0_10, GPIO_BANK_DAI0, 9U },
+    {"DAI0.11", "DAI0_PIN11", GPIO_DAI0_11, GPIO_BANK_DAI0, 10U},
+    {"DAI0.12", "DAI0_PIN12", GPIO_DAI0_12, GPIO_BANK_DAI0, 11U},
+    {"DAI0.19", "DAI0_PIN19", GPIO_DAI0_19, GPIO_BANK_DAI0, 18U},
+    {"DAI0.20", "DAI0_PIN20", GPIO_DAI0_20, GPIO_BANK_DAI0, 19U},
+
+    // DAI1_PIN11/12 -- bonded on this package, jumpered per netlist.
+    {"P13.22", "DAI1_PIN11", GPIO_DAI1_11, GPIO_BANK_DAI1, 10U},
+    {"P13.24", "DAI1_PIN12", GPIO_DAI1_12, GPIO_BANK_DAI1, 11U},
+
+    // PA00..PA05 = SPI2/OSPI bus (the DSP boot bus, jumpered to
+    // FPGA J1).  The on-SOM flash is gated off these by
+    // board_som_init(), so they re-mux to GPIO and probe cleanly.
+    {"PA.00", "SPI2_MISO", GPIO_PA00, GPIO_BANK_PORTA, 0U },
+    {"PA.01", "SPI2_MOSI", GPIO_PA01, GPIO_BANK_PORTA, 1U },
+    {"PA.02", "SPI2_D2",   GPIO_PA02, GPIO_BANK_PORTA, 2U },
+    {"PA.03", "SPI2_D3",   GPIO_PA03, GPIO_BANK_PORTA, 3U },
+    {"PA.04", "SPI2_CLK",  GPIO_PA04, GPIO_BANK_PORTA, 4U },
+    {"PA.05", "SPI2_SEL1", GPIO_PA05, GPIO_BANK_PORTA, 5U },
 };
 
-#define N_PINS 22U
+#define N_PINS 44U
 
 static_assert(sizeof(pins) / sizeof(pins[0]) == N_PINS,
               "N_PINS out of sync with pin table");
@@ -286,8 +318,11 @@ static void report_weird(const bool floating[N_PINS])
 
 static char idx_to_char(uint32_t idx)
 {
-   return (char)(idx < IDX_DIGIT_SPAN ? ('0' + idx)
-                                      : ('a' + (idx - IDX_DIGIT_SPAN)));
+   if (idx < IDX_DIGIT_SPAN)
+      return (char)('0' + idx);
+   if (idx < IDX_DIGIT_SPAN + 26U)
+      return (char)('a' + (idx - IDX_DIGIT_SPAN));
+   return (char)('A' + (idx - IDX_DIGIT_SPAN - 26U));
 }
 
 static int parse_pin_idx(int c)
@@ -297,7 +332,7 @@ static int parse_pin_idx(int c)
    if (c >= 'a' && c <= 'z')
       return (int)IDX_DIGIT_SPAN + (c - 'a');
    if (c >= 'A' && c <= 'Z')
-      return (int)IDX_DIGIT_SPAN + (c - 'A');
+      return (int)IDX_DIGIT_SPAN + 26 + (c - 'A');
    return -1;
 }
 
@@ -374,15 +409,15 @@ static void emit_pin_snapshot(void)
    }
    uint32_t banks[GPIO_BANK_COUNT];
    snapshot(banks);
-   uint32_t v = 0U;
+   uint64_t v = 0U;
    for (uint32_t i = 0; i < N_PINS; i++) {
       if (sample_bit(banks, i)) {
-         v |= (1U << i);
+         v |= ((uint64_t)1U << i);
       }
    }
    diag_puts("Q=");
-   for (int nib = 5; nib >= 0; nib--) {
-      uint32_t n = (v >> (nib * 4)) & 0xFU;
+   for (int nib = (int)((N_PINS + 3U) / 4U) - 1; nib >= 0; nib--) {
+      uint32_t n = (uint32_t)((v >> (nib * 4)) & 0xFU);
       uart_putc((char)(n < 10 ? ('0' + n) : ('a' + (n - 10))));
    }
    diag_puts("\r\n");

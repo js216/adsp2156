@@ -353,30 +353,33 @@ void sport_enable_external_pins(const enum sport_id id)
 
 void sport_install_external_loopback(const enum sport_id id)
 {
-   // Only SPORT4's pin source codes are tabulated here; extend as
-   // needed for SPORT0..3 / 5 / 6.
-   assert(id == SPORT_ID_4);
-   // SPORT4 half-A drives PB01/PB02/PB04; half-B receives from
-   // PB05/PB07/PB08 (matching pair). Group-A code 0x06 = DAI1_PB07_O,
-   // group-C code 0x07 = DAI1_PB08_O, group-B code 0x04 = DAI1_PB05_O.
-   // Force the return pins to inputs so an FPGA or jumper is the only
-   // possible source for SPORT4B.
-   sru_set_field(REG_DAI1_PBEN0,
-                 (struct reg_field){24U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // DAI1 PB05 input
-   sru_set_field(REG_DAI1_PBEN1,
-                 (struct reg_field){6U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // DAI1 PB07 input
-   sru_set_field(REG_DAI1_PBEN1,
-                 (struct reg_field){12U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // DAI1 PB08 input
-   sru_set_field(REG_DAI1_CLK0,
-                 (struct reg_field){5U, BITS_DAI_CLK_FIELD_M},
-                 0x06U);
-   sru_set_field(REG_DAI1_FS0,
-                 (struct reg_field){5U, BITS_DAI_FS_FIELD_M},
-                 0x07U);
-   sru_set_field(REG_DAI1_DAT0,
-                 (struct reg_field){12U, BITS_DAI_DAT_FIELD_M},
-                 0x04U);
+   // SPORTn half-A drives PBxx; half-B receives from PB05/PB07/PB08
+   // (matching pair). Group-A code 0x06 = PB07_O, group-C code
+   // 0x07 = PB08_O, group-B code 0x04 = PB05_O -- the same SRU source
+   // codes and field positions apply on either DAI block, so SPORT0
+   // (DAI0) is an exact mirror of SPORT4 (DAI1). Force the return
+   // pins to inputs so an FPGA or jumper is the only possible source.
+   uint32_t pben0, pben1, clk0, fs0, dat0;
+   if (id == SPORT_ID_4) {
+      pben0 = REG_DAI1_PBEN0; pben1 = REG_DAI1_PBEN1;
+      clk0  = REG_DAI1_CLK0;  fs0   = REG_DAI1_FS0;  dat0 = REG_DAI1_DAT0;
+   } else if (id == SPORT_ID_0) {
+      pben0 = REG_DAI0_PBEN0; pben1 = REG_DAI0_PBEN1;
+      clk0  = REG_DAI0_CLK0;  fs0   = REG_DAI0_FS0;  dat0 = REG_DAI0_DAT0;
+   } else {
+      assert(0); // only SPORT0 (DAI0) and SPORT4 (DAI1) tabulated
+      return;
+   }
+   sru_set_field(pben0, (struct reg_field){24U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // PB05 input
+   sru_set_field(pben1, (struct reg_field){6U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // PB07 input
+   sru_set_field(pben1, (struct reg_field){12U, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW); // PB08 input
+   sru_set_field(clk0, (struct reg_field){5U, BITS_DAI_CLK_FIELD_M},
+                 0x06U); // SPORTnB ACLK <- PB07_O
+   sru_set_field(fs0, (struct reg_field){5U, BITS_DAI_FS_FIELD_M},
+                 0x07U); // SPORTnB AFS <- PB08_O
+   sru_set_field(dat0, (struct reg_field){12U, BITS_DAI_DAT_FIELD_M},
+                 0x04U); // SPORTnB data <- PB05_O
 }
