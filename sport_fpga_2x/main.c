@@ -348,6 +348,8 @@ int main(void)
          .dsel     = 3U,
          .osel     = 40U,
       };
+#elif SPORT_SCLK_HZ == 59375000U
+      CLOCKS_CFG_SCLK0_59MHZ;
 #else
       BOARD_CLOCKS_CFG;
 #endif

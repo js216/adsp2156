@@ -114,6 +114,26 @@ struct clocks_cfg {
        .osel     = 40U,                                                        \
    }
 
+// SCLK0 = 59.375 MHz configuration: MSEL=57, 5%% below the 62.5 MHz
+// datasheet SPORT cap, requested by jk 2026-06-11 after a single-word
+// D->F corruption at 4 GiB at full rate. Same divisors as the 62MHZ
+// cfg so every ratio condition is preserved:
+//   CLKIN = 25 MHz, MSEL = 57, DF = 0
+//   PLLCLK = 1425 MHz (in 1.20..2.00 GHz, Table 20), CCLK = 712.5 MHz
+//   SYSCLK = 356.25 MHz (= CCLK/2), SCLK0 = 59.375 MHz (N = 6).
+#define CLOCKS_CFG_SCLK0_59MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 57U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 2U,                                                         \
+       .syssel   = 4U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
 // Program CGU0 to the given configuration and wait for PLL
 // lock. The caller is responsible for ensuring BOARD_SCLK_HZ
 // matches the SCLK0 that `cfg` produces; the function does

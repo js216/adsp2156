@@ -37,9 +37,9 @@
 #endif
 #define SPORT_WORD_BITS       32U
 #define SPORT_FSDIV           31U
-#define SPORT_SCLK_HZ         62500000U
+#define SPORT_SCLK_HZ         59375000U
 #define SPORT_CLKDIV          0U
-#define SPORT_BIT_CLK_HZ      62500000U
+#define SPORT_BIT_CLK_HZ      59375000U
 #define NCH                   4U
 #define AGG_RATE_BPS          (SPORT_BIT_CLK_HZ * NCH)
 #define LOCAL_BAUD_DIV        ((SPORT_SCLK_HZ + (BOARD_BAUD / 2U)) / BOARD_BAUD)
@@ -121,7 +121,7 @@ static struct sport_dsp_cfg tx_master_cfg = {
 
 int main(void)
 {
-   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_62MHZ;
+   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_59MHZ;
    clocks_init(&clk);
    uart_init(LOCAL_BAUD_DIV);
    diag("entry");

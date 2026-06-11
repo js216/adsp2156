@@ -32,11 +32,13 @@
 #ifndef RX_HALF
 #define RX_HALF 8192U
 #endif
+// receive heartbeat period in halves (~8 MiB at 8192-word halves)
+#define RX_PROG_HALVES (2097152U / RX_HALF)
 #ifndef TX_HALF
 #define TX_HALF 4096U
 #endif
 #define PRBS31_SEED 0x7FFFFFFFU
-#define SCLK_HZ 62500000ULL
+#define SCLK_HZ 59375000ULL
 #define LOCAL_BAUD_DIV ((uint32_t)((SCLK_HZ + (BOARD_BAUD / 2ULL)) / BOARD_BAUD))
 #define START_TIMEOUT 1000U
 #define START_WAIT_LOOPS 2000000U
@@ -217,7 +219,7 @@ static struct sport_dsp_cfg tx_cfg = {
 
 int main(void)
 {
-   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_62MHZ;
+   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_59MHZ;
    clocks_init(&clk);
    uart_init(LOCAL_BAUD_DIV);
    while ((MMR(REG_UART0_STAT) & BIT_UART_STAT_THRE) == 0U) {}
@@ -276,7 +278,7 @@ int main(void)
    // FPGA taps this copy for its to_dsp forwarder so the from_dsp
    // capture clock keeps a single light load (proven topology).
    sport_route_clk_copy(SPORT_ID_4, 1U, 4U);
-#if RX_N >= 3U
+#if TX_N >= 2U || RX_N >= 3U
    sport_route_clk_copy(SPORT_ID_0, 0U, 2U);
 #endif
    if (TX_N > 1U)
@@ -319,6 +321,13 @@ int main(void)
             check_half(completed, &prbs, errors);
             got_words += RX_HALF;
             rx_half++;
+            // ~1 Hz receive heartbeat with running error count, so a
+            // failing stream is visible (and localizable) live.
+            if ((rx_half & (RX_PROG_HALVES - 1U)) == 0U) {
+               put_str("rx h="); put_u32(rx_half);
+               put_str(" e="); put_u32(errors[0] + errors[1] + (RX_N > 2U ? errors[2] + errors[3] : 0U));
+               put_str("\r\n");
+            }
             if (rx_half >= rx_halves_target) rx_done = true;
          }
       }

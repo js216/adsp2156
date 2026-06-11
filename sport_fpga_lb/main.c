@@ -44,9 +44,9 @@
 #define MAX_STARTUP_SKIP  4U
 #define SPORT_WORD_BITS   32U
 #define SPORT_FSDIV       31U
-#define SPORT_SCLK_HZ     62500000U
+#define SPORT_SCLK_HZ     59375000U
 #define SPORT_CLKDIV      0U
-#define SPORT_BIT_CLK_HZ  62500000U
+#define SPORT_BIT_CLK_HZ  59375000U
 #define LOCAL_BAUD_DIV    ((SPORT_SCLK_HZ + (BOARD_BAUD / 2U)) / BOARD_BAUD)
 #define BITS_PER_BYTE_64  8ULL
 #define MIN_RATE_BPS      30000000ULL
@@ -190,7 +190,7 @@ int main(void)
    uart_init(BOARD_BAUD_DIV);
    while ((MMR(REG_UART0_STAT) & BIT_UART_STAT_THRE) == 0U) {
    }
-   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_62MHZ;
+   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_59MHZ;
    clocks_init(&clk);
    MMR(REG_UART0_CLK) =
        BIT_UART_CLK_EDBO | (LOCAL_BAUD_DIV & MASK_UART_CLK_DIV);

@@ -48,7 +48,7 @@
 #define SPORT_WORD_BITS       32U
 #define SPORT_FSDIV           31U
 #ifndef SPORT_SCLK_HZ
-#define SPORT_SCLK_HZ         62500000U
+#define SPORT_SCLK_HZ         59375000U
 #endif
 #define SPORT_CLKDIV          0U
 #define SPORT_BIT_CLK_HZ      (SPORT_SCLK_HZ / (SPORT_CLKDIV + 1U))
@@ -182,8 +182,10 @@ int main(void)
       CLOCKS_CFG_SCLK0_60MHZ;
 #elif SPORT_SCLK_HZ == 60833333U
       CLOCKS_CFG_SCLK0_60833333HZ;
-#else
+#elif SPORT_SCLK_HZ == 62500000U
       CLOCKS_CFG_SCLK0_62MHZ;
+#else
+      CLOCKS_CFG_SCLK0_59MHZ;
 #endif
    clocks_init(&clk);
    uart_init(LOCAL_BAUD_DIV);

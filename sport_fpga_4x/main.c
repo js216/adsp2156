@@ -22,7 +22,7 @@
 #define HALF_WORDS        16384U
 #endif
 #define NCH               4U
-#define SPORT_CLKDIV      2U
+#define SPORT_CLKDIV      1U
 #define SPORT_FSDIV       31U
 #define PRBS31_SEED       0x7FFFFFFFU
 #ifndef RX_SAMPLE_RISING
@@ -291,9 +291,10 @@ static struct sport_dsp_cfg rx_slave_cfg = {
 
 int main(void)
 {
-   static const struct clocks_cfg clk = BOARD_CLOCKS_CFG;
+   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_59MHZ;
+#define LOCAL_BAUD_DIV ((59375000U + (BOARD_BAUD / 2U)) / BOARD_BAUD)
    clocks_init(&clk);
-   uart_init(BOARD_BAUD_DIV);
+   uart_init(LOCAL_BAUD_DIV);
    timer_init();
    board_som_init(0U);
    gpio_make_output(GPIO_DAI1_06);

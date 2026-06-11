@@ -35,7 +35,7 @@
 #define RX_SHIFT_LEFT_1   0
 #endif
 #ifndef SPORT_SCLK_HZ
-#define SPORT_SCLK_HZ     93750000U
+#define SPORT_SCLK_HZ     59375000U
 #endif
 #ifndef SPORT_CLKDIV
 #define SPORT_CLKDIV      2U
@@ -319,6 +319,8 @@ int main(void)
    static const struct clocks_cfg clk =
 #if SPORT_SCLK_HZ == 60000000U
       CLOCKS_CFG_SCLK0_60MHZ;
+#elif SPORT_SCLK_HZ == 59375000U
+      CLOCKS_CFG_SCLK0_59MHZ;
 #else
       BOARD_CLOCKS_CFG;
 #endif
