@@ -263,9 +263,6 @@ int main(void)
 #endif
    }
    gpio_write(GPIO_DAI1_06, true);
-   // Generous RUN-to-enable gap: the FPGA detects the RUN edge on its
-   // always-running 12 MHz clock and re-arms on the first bit-clock
-   // ticks; by the time data flows the receiver is freshly armed.
    delay_us(500U);
    for (uint32_t c = 0U; c < NCH; c++)
       sport_enable(TX_ID[c], SPORT_HALF_A);
