@@ -144,6 +144,44 @@ bool sport_has_error(const enum sport_id id, const enum sport_half half);
 //       on DAI1).
 void sport_enable_external_pins(const enum sport_id id);
 
+// Route SPORT0 half-A TX signals onto the wired DAI0 PB05/PB07/PB08
+// pins instead of the default SPORT0A pin set. The live FPGA-DSP scan
+// maps those pins to R5/T5/R9; SPORT0A's default AD0 pin is not wired
+// on this bench. This helper only changes SRU/PBEN routing. The caller
+// still configures SPORT0A as a transmitter and enables it normally.
+void sport_route_sport0a_to_wired_pins(void);
+
+// Route SPORT half-A TX signals onto an arbitrary wired DAI pin triple.
+// `dai_idx` is 0 or 1. Pin numbers are DAI PB numbers (1..12, 19, 20).
+// The source SPORT must belong to the selected DAI half (SPORT0..3 for
+// DAI0, SPORT4..7 for DAI1).
+void sport_route_clk_copy(const enum sport_id id, uint32_t dai_idx,
+                          uint32_t pin);
+void sport_route_tx_to_pins(const enum sport_id id, uint32_t dai_idx,
+                            uint32_t ad0_pin, uint32_t aclk_pin,
+                            uint32_t afs_pin);
+
+// Route arbitrary wired DAI input pins into SPORT half-B. The FPGA drives
+// the selected pin triple; this helper forces those pins to inputs and
+// routes PBxx_O into the SPORT B clock/frame/data destinations.
+void sport_route_rx_from_pins(const enum sport_id id, uint32_t dai_idx,
+                              uint32_t ad0_pin, uint32_t aclk_pin,
+                              uint32_t afs_pin);
+
+// Route a SPORT half-B receiver that is also the SPORT clock/frame-sync
+// master. The data pin is an input into BD0; the ACLK/BFS pins are driven
+// from the half-B clock and frame-sync outputs.
+void sport_route_rx_master_to_pins(const enum sport_id id, uint32_t dai_idx,
+                                   uint32_t ad0_pin, uint32_t bclk_pin,
+                                   uint32_t bfs_pin);
+
+// Same as sport_route_rx_master_to_pins(), but for half-A: AD0 is routed
+// from the DAI pin into the SPORT receiver, while ACLK/AFS are driven from
+// the half-A clock/frame outputs.
+void sport_route_rx_master_a_to_pins(const enum sport_id id, uint32_t dai_idx,
+                                     uint32_t ad0_pin, uint32_t aclk_pin,
+                                     uint32_t afs_pin);
+
 // Route the half-A pin-buffer INPUTS back into half-B's clock,
 // frame-sync and data inputs through the DAI SRU. Required when
 // using a true off-chip jumper loopback (or an FPGA pass-through)

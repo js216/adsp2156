@@ -1,14 +1,12 @@
 # SPDX-License-Identifier: MIT
-# Makefile --- sport_fpga_2x: SPORT0B + SPORT4B parallel PRBS receiver
+# Makefile --- sport_fpga_rx, single 4097-word variant
 # Copyright (c) 2026 Jakob Kastelic
 OBJ = \
   startup.doj \
   main.doj \
   assert.doj \
   sport.doj \
-  dma.doj \
   clocks.doj \
-  gpio.doj \
   timer.doj \
   pinmux.doj \
   uart.doj \

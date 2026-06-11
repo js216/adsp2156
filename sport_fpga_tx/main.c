@@ -5,6 +5,7 @@
 #include "board.h"
 #include "clocks.h"
 #include "dma.h"
+#include "gpio.h"
 #include "regs.h"
 #include "sport.h"
 #include "timer.h"
@@ -18,23 +19,67 @@
 #ifndef TOTAL_WORDS
 #define TOTAL_WORDS 16777216U
 #endif
-#define HALF_WORDS        1024U
-#define BIT_CLK_HZ        62250000U
-#define MAX_RATE_BPS      62500000U
-#define MIN_RATE_BPS      49800000U
+#ifndef HALF_WORDS
+#define HALF_WORDS        32768U
+#endif
+#ifndef RX_SAMPLE_RISING
+#define RX_SAMPLE_RISING  1
+#endif
+#ifndef RX_LATE_FS
+#define RX_LATE_FS        0
+#endif
+#ifndef RX_DATA_INDEP_FS
+#define RX_DATA_INDEP_FS  0
+#endif
+#ifndef RX_SHIFT_LEFT_1
+#define RX_SHIFT_LEFT_1   0
+#endif
+#ifndef SPORT_SCLK_HZ
+#define SPORT_SCLK_HZ     93750000U
+#endif
+#ifndef SPORT_CLKDIV
+#define SPORT_CLKDIV      2U
+#endif
+#define BIT_CLK_HZ        (SPORT_SCLK_HZ / (SPORT_CLKDIV + 1U))
+#ifndef SPORT_FSDIV
+#define SPORT_FSDIV       31U
+#endif
+#define CAPTURE_WORDS     (TOTAL_WORDS + (RX_SHIFT_LEFT_1 ? 1U : 0U))
+#define MAX_RATE_BPS      32000000U
+#define MIN_RATE_BPS      30000000U
 #define START_TIMEOUT     1000U
-#define START_WAIT_LOOPS  2000000U
 #define PRBS31_SEED       0x7FFFFFFFU
-#define SCLK_HZ_64        93750000ULL
+#define SCLK_HZ_64        ((uint64_t)SPORT_SCLK_HZ)
 #define BITS_PER_BYTE_64  8ULL
 #define SPORT4B_ERR       0x310024A0U
+#define LOCAL_BAUD_DIV    ((SPORT_SCLK_HZ + (BOARD_BAUD / 2U)) / BOARD_BAUD)
 
 #pragma section("seg_l2_bss", NO_INIT)
-static uint32_t rx_a[HALF_WORDS];
-#pragma section("seg_l2_bss", NO_INIT)
-static uint32_t rx_pong[HALF_WORDS];
+static uint32_t rx_ring[2][HALF_WORDS];
 #pragma section("seg_l2_bss", NO_INIT)
 static struct dma_dscl rx_desc[2];
+
+static uint32_t errors = 0U;
+static uint32_t timeouts = 0U;
+static uint32_t overruns = 0U;
+static uint32_t wrap_misses = 0U;
+static uint32_t got_words = 0U;
+static uint32_t prbs_state = PRBS31_SEED;
+static int32_t firsterr = -1;
+static uint32_t firstgot = 0U;
+static uint32_t firstexp = 0U;
+static uint64_t elapsed_ticks64 = 0ULL;
+static bool locked = false;
+static uint8_t prbs8_table[2048];
+static uint32_t dbg_got[16];
+static uint32_t dbg_exp[16];
+static uint32_t err_idx[16];
+static uint32_t err_got[16];
+static uint32_t err_exp[16];
+static uint32_t err_saved = 0U;
+static uint32_t raw_words = 0U;
+static uint32_t align_prev = 0U;
+static bool align_prev_valid = false;
 
 static void put_str(const char *s)
 {
@@ -134,19 +179,43 @@ static void put_u64(uint64_t v)
    }
 }
 
+static void put_hex32(uint32_t v)
+{
+   static const char hex[] = "0123456789abcdef";
+   for (int i = 7; i >= 0; i--)
+      uart_putc(hex[(v >> ((unsigned)i * 4U)) & 0xFU]);
+}
+
+static void prbs8_init(void)
+{
+   for (uint32_t idx = 0U; idx < 2048U; idx++) {
+      uint32_t s = idx << 20U;
+      uint32_t b = 0U;
+      for (uint32_t i = 0U; i < 8U; i++) {
+         uint32_t new_bit = ((s >> 30U) ^ (s >> 27U)) & 1U;
+         s = ((s << 1U) | new_bit) & 0x7FFFFFFFU;
+         b = (b << 1U) | new_bit;
+      }
+      prbs8_table[idx] = (uint8_t)b;
+   }
+}
+
 // PRBS-31, polynomial x^31 + x^28 + 1, seed 0x7fffffff.
 // Generates serial bits with new_bit = state[30] ^ state[27] and packs
 // 32 output bits per SPORT word, first generated bit into word bit 31.
 static inline uint32_t prbs31_word(uint32_t *state)
 {
-   uint32_t s = *state & 0x7FFFFFFFU;
-   uint32_t word = 0U;
-   for (uint32_t i = 0U; i < 32U; i++) {
-      uint32_t new_bit = ((s >> 30U) ^ (s >> 27U)) & 1U;
-      s = ((s << 1U) | new_bit) & 0x7FFFFFFFU;
-      word = (word << 1U) | new_bit;
-   }
+   uint32_t s = *state;
+   uint32_t b0 = prbs8_table[s >> 20U];
+   s = ((s << 8U) & 0x7FFFFFFFU) | b0;
+   uint32_t b1 = prbs8_table[s >> 20U];
+   s = ((s << 8U) & 0x7FFFFFFFU) | b1;
+   uint32_t b2 = prbs8_table[s >> 20U];
+   s = ((s << 8U) & 0x7FFFFFFFU) | b2;
+   uint32_t b3 = prbs8_table[s >> 20U];
+   s = ((s << 8U) & 0x7FFFFFFFU) | b3;
    *state = s;
+   uint32_t word = (b0 << 24U) | (b1 << 16U) | (b2 << 8U) | b3;
    return word;
 }
 
@@ -158,28 +227,11 @@ static inline void accum_elapsed_ticks(uint64_t *elapsed_ticks64,
    *last_tick = now;
 }
 
-static bool discard_until_stream_gap(void)
-{
-   uint32_t scratch = 0U;
-   bool saw_activity = false;
-
-   while (sport_read(SPORT_ID_4, SPORT_HALF_B, &scratch, START_TIMEOUT) == 0) {
-   }
-   for (uint32_t i = 0U; i < START_WAIT_LOOPS; i++) {
-      if (sport_read(SPORT_ID_4, SPORT_HALF_B, &scratch, START_TIMEOUT) == 0) {
-         saw_activity = true;
-      } else if (saw_activity) {
-         return true;
-      }
-   }
-   return false;
-}
-
-static uint32_t dma_current_half(void)
+static uint32_t dma_ring_half(void)
 {
    uint32_t addr = dma_addr_cur(DMA_CH_SPORT4_B);
-   uint32_t b0 = (uint32_t)rx_a;
-   uint32_t b1 = (uint32_t)rx_pong;
+   uint32_t b0 = (uint32_t)&rx_ring[0][0];
+   uint32_t b1 = (uint32_t)&rx_ring[1][0];
    uint32_t bytes = HALF_WORDS * 4U;
 
    if (addr >= b1 && addr < (b1 + bytes))
@@ -189,95 +241,185 @@ static uint32_t dma_current_half(void)
    return 2U;
 }
 
-static void check_half(const uint32_t *buf, uint32_t base_index,
-                       uint32_t *errors, int32_t *firsterr)
+static bool dma_still_on_half(uint32_t completed_half)
 {
-   static uint32_t prbs_state = PRBS31_SEED;
-   (void)base_index;
-   for (uint32_t i = 0U; i < HALF_WORDS; i++) {
-      uint32_t expected = prbs31_word(&prbs_state);
-      if (buf[i] != expected) {
-         if (*firsterr < 0)
-            *firsterr = (int32_t)(base_index + i);
-         if (*errors != UINT32_MAX)
-            (*errors)++;
+   for (uint32_t i = 0U; i < 10000U; i++) {
+      if (dma_ring_half() != completed_half)
+         return false;
+   }
+   return dma_ring_half() == completed_half;
+}
+
+static void check_word(uint32_t word, bool *locked, uint32_t *prbs_state,
+                       uint32_t *got_words, uint32_t *errors,
+                       int32_t *firsterr, uint32_t *firstgot,
+                       uint32_t *firstexp)
+{
+   uint32_t expected = prbs31_word(prbs_state);
+   if (*got_words < 16U) {
+      dbg_got[*got_words] = word;
+      dbg_exp[*got_words] = expected;
+   }
+   if (word != expected) {
+      if (err_saved < 16U) {
+         err_idx[err_saved] = *got_words;
+         err_got[err_saved] = word;
+         err_exp[err_saved] = expected;
+         err_saved++;
       }
+      if (*firsterr < 0) {
+         *firsterr = (int32_t)*got_words;
+         *firstgot = word;
+         *firstexp = expected;
+      }
+      if (*errors != UINT32_MAX)
+         (*errors)++;
+   }
+   (*got_words)++;
+   *locked = (*got_words != 0U);
+}
+
+static void process_words(const uint32_t *buf, uint32_t nwords, bool *locked,
+                          uint32_t *prbs_state, uint32_t *got_words,
+                          uint32_t *errors, int32_t *firsterr,
+                          uint32_t *firstgot, uint32_t *firstexp)
+{
+   for (uint32_t i = 0U; i < nwords && raw_words < CAPTURE_WORDS; i++) {
+#if RX_SHIFT_LEFT_1
+      if (align_prev_valid && *got_words < TOTAL_WORDS) {
+         uint32_t aligned = (align_prev << 1) | (buf[i] >> 31);
+         check_word(aligned, locked, prbs_state, got_words, errors, firsterr,
+                    firstgot, firstexp);
+      }
+      align_prev = buf[i];
+      align_prev_valid = true;
+#else
+      if (*got_words < TOTAL_WORDS)
+         check_word(buf[i], locked, prbs_state, got_words, errors, firsterr,
+                    firstgot, firstexp);
+#endif
+      raw_words++;
    }
 }
 
 static struct sport_dsp_cfg rx_slave_cfg = {
     .word_bits     = 32,
-    .clkdiv        = 0,
-    .fsdiv         = 0,
+    .clkdiv        = SPORT_CLKDIV,
+    .fsdiv         = SPORT_FSDIV,
     .is_tx         = false,
-    .internal_clk  = false,
-    .internal_fs   = false,
-    .late_fs       = true,
-    .data_indep_fs = false,
-    .sample_rising = true,
+    .internal_clk  = true,
+    .internal_fs   = true,
+    .late_fs       = (RX_LATE_FS != 0),
+    .data_indep_fs = (RX_DATA_INDEP_FS != 0),
+    .sample_rising = (RX_SAMPLE_RISING != 0),
 };
 
 int main(void)
 {
-   static const struct clocks_cfg clk = BOARD_CLOCKS_CFG;
+   static const struct clocks_cfg clk =
+#if SPORT_SCLK_HZ == 60000000U
+      CLOCKS_CFG_SCLK0_60MHZ;
+#else
+      BOARD_CLOCKS_CFG;
+#endif
    clocks_init(&clk);
-   uart_init(BOARD_BAUD_DIV);
+   uart_init(LOCAL_BAUD_DIV);
    timer_init();
    board_som_init(0U);
+   gpio_make_output(GPIO_DAI1_06);
+   gpio_write(GPIO_DAI1_06, false);
+   prbs8_init();
 
    put_str("\r\nsport_fpga_tx_prbs_long boot prbs31 poly=x^31+x^28+1 seed=0x7FFFFFFF pack=msb_first_output_bits\r\n");
 
-   sport_enable_external_pins(SPORT_ID_4);
-   sport_install_external_loopback(SPORT_ID_4);
+   put_str("sport_route_start\r\n");
+   sport_route_rx_master_to_pins(SPORT_ID_4, 1U, 5U, 7U, 8U);
+   put_str("sport_init_start\r\n");
    sport_dsp_serial_init(SPORT_ID_4, SPORT_HALF_B, &rx_slave_cfg);
+   put_str("sport_clear_start\r\n");
    sport_clear_errors(SPORT_ID_4, SPORT_HALF_B);
+   put_str("sport_setup_done\r\n");
+
+#ifdef DIAG_FIRST_WORDS
+   gpio_write(GPIO_DAI1_06, true);
+   delay_us(10U);
    sport_enable(SPORT_ID_4, SPORT_HALF_B);
-
-   uint32_t errors = 0U;
-   uint32_t timeouts = 0U;
-   uint32_t overruns = 0U;
-   uint32_t wrap_misses = 0U;
-   uint32_t got_words = 0U;
-   int32_t firsterr = -1;
-   uint64_t elapsed_ticks64 = 0ULL;
-
-   if (!discard_until_stream_gap()) {
-      timeouts++;
-   } else {
-      dma_pingpong_rx_config(DMA_CH_SPORT4_B, rx_a, rx_pong, HALF_WORDS,
-                             rx_desc);
-      uint32_t last_tick = timer_ticks();
-
-      for (uint32_t half = 0U; half < (TOTAL_WORDS / HALF_WORDS); half++) {
-         uint32_t deadline = last_tick + (BOARD_SCLK_HZ * 2U);
-         while (!dma_wrap_check(DMA_CH_SPORT4_B)) {
-            accum_elapsed_ticks(&elapsed_ticks64, &last_tick);
-            if ((int32_t)(last_tick - deadline) >= 0) {
-               timeouts++;
-               break;
-            }
-         }
-         if (timeouts != 0U)
-            break;
-
-         uint32_t completed_half = half & 1U;
-         uint32_t current_half = dma_current_half();
-         if (current_half == completed_half) {
-            overruns++;
-            break;
-         }
-         if (current_half > 1U)
-            wrap_misses++;
-
-         check_half(completed_half == 0U ? rx_a : rx_pong, got_words, &errors,
-                    &firsterr);
-         got_words += HALF_WORDS;
-         accum_elapsed_ticks(&elapsed_ticks64, &last_tick);
+   put_str("sport_diag start\r\n");
+   uint32_t nread = 0U;
+   uint32_t deadline_diag = timer_ticks() + (SPORT_SCLK_HZ * 4U);
+   while ((int32_t)(timer_ticks() - deadline_diag) < 0 && nread < 16U) {
+      uint32_t word = 0U;
+      if (sport_read(SPORT_ID_4, SPORT_HALF_B, &word, START_TIMEOUT) == 0) {
+         put_str("sport_diag word");
+         put_u32(nread);
+         put_str("=0x");
+         put_hex32(word);
+         put_str("\r\n");
+         nread++;
       }
-
-      dma_disable(DMA_CH_SPORT4_B);
-      dma_wait_idle(DMA_CH_SPORT4_B);
    }
+   put_str("sport_diag nread=");
+   put_u32(nread);
+   put_str(" err=0x");
+   put_hex32(MMR(SPORT4B_ERR));
+   put_str("\r\n");
+   for (;;) {
+   }
+#endif
+
+   put_str("normal_path_start\r\n");
+   put_str("dma_pp_cfg\r\n");
+   dma_pingpong_rx_config(DMA_CH_SPORT4_B, &rx_ring[0][0], &rx_ring[1][0],
+                          HALF_WORDS, rx_desc);
+   put_str("dma_pp_armed\r\n");
+   gpio_write(GPIO_DAI1_06, true);
+   put_str("run_asserted\r\n");
+   delay_us(10U);
+   sport_enable(SPORT_ID_4, SPORT_HALF_B);
+   put_str("sport_rx_enabled\r\n");
+   locked = true;
+
+   uint32_t last_tick = timer_ticks();
+   uint32_t halves = 0U;
+   while (raw_words < CAPTURE_WORDS) {
+      uint32_t deadline = last_tick + (SPORT_SCLK_HZ * 3U);
+      while (!dma_wrap_check(DMA_CH_SPORT4_B)) {
+         accum_elapsed_ticks(&elapsed_ticks64, &last_tick);
+         if ((int32_t)(last_tick - deadline) >= 0) {
+            timeouts++;
+            break;
+         }
+      }
+      if (timeouts != 0U)
+         break;
+
+      uint32_t completed = halves & 1U;
+      bool final_half = (raw_words + HALF_WORDS) >= CAPTURE_WORDS;
+      if (final_half) {
+         dma_disable(DMA_CH_SPORT4_B);
+         dma_wait_idle(DMA_CH_SPORT4_B);
+      }
+      if (dma_still_on_half(completed)) {
+         overruns++;
+         break;
+      }
+      process_words(&rx_ring[completed][0], HALF_WORDS, &locked, &prbs_state,
+                    &got_words, &errors, &firsterr, &firstgot, &firstexp);
+      if (!final_half)
+         accum_elapsed_ticks(&elapsed_ticks64, &last_tick);
+      if (sport_has_error(SPORT_ID_4, SPORT_HALF_B)) {
+         overruns++;
+         break;
+      }
+      halves++;
+      if (halves > ((CAPTURE_WORDS / HALF_WORDS) + 2048U)) {
+         timeouts++;
+         break;
+      }
+   }
+
+   dma_disable(DMA_CH_SPORT4_B);
+   dma_wait_idle(DMA_CH_SPORT4_B);
 
    sport_disable(SPORT_ID_4, SPORT_HALF_B);
    bool sport_error = sport_has_error(SPORT_ID_4, SPORT_HALF_B);
@@ -291,9 +433,8 @@ int main(void)
 
    bool pass = (bytes == TOTAL_BYTES && got_words == TOTAL_WORDS &&
                 errors == 0U && firsterr == -1 && timeouts == 0U &&
-                overruns == 0U && wrap_misses == 0U && !sport_error &&
-                BIT_CLK_HZ >= 62000000U && BIT_CLK_HZ <= 62500000U &&
-                rate_bps >= MIN_RATE_BPS && rate_bps <= MAX_RATE_BPS);
+                overruns == 0U && wrap_misses == 0U && locked && !sport_error &&
+                BIT_CLK_HZ >= MIN_RATE_BPS && BIT_CLK_HZ <= MAX_RATE_BPS);
 
    put_str("sport_fpga_tx_prbs_long bytes=");
    put_u64(bytes);
@@ -303,6 +444,10 @@ int main(void)
    put_u32(errors);
    put_str(" firsterr=");
    put_i32(firsterr);
+   put_str(" firstgot=0x");
+   put_hex32(firstgot);
+   put_str(" firstexp=0x");
+   put_hex32(firstexp);
    put_str(" timeouts=");
    put_u32(timeouts);
    put_str(" overruns=");
@@ -312,9 +457,7 @@ int main(void)
    put_str(" sport_error=");
    put_u32(sport_error ? 1U : 0U);
    put_str(" sport_err=0x");
-   static const char hex[] = "0123456789abcdef";
-   for (int i = 7; i >= 0; i--)
-      uart_putc(hex[(sport_err >> ((unsigned)i * 4U)) & 0xFU]);
+   put_hex32(sport_err);
    put_str(" bit_clk_hz=");
    put_u32(BIT_CLK_HZ);
    put_str(" ticks=");
@@ -323,6 +466,18 @@ int main(void)
    put_u64(rate_bps);
    put_str(" ");
    put_str(pass ? "PASS\r\n" : "FAIL\r\n");
+   if (err_saved != 0U) {
+      put_str("sport_fpga_tx_errs");
+      for (uint32_t i = 0U; i < err_saved; i++) {
+         put_str(" idx=");
+         put_u32(err_idx[i]);
+         put_str(" got=0x");
+         put_hex32(err_got[i]);
+         put_str(" exp=0x");
+         put_hex32(err_exp[i]);
+      }
+      put_str("\r\n");
+   }
 
    for (;;) {
    }

@@ -32,6 +32,9 @@
 #define MASK_CGU_CTL_DF   (CGU_CTL_DF_W << POS_CGU_CTL_DF)
 
 // CGU_DIV fields we care about (HRM 2-22..23).
+#define CGU_DIV_CSEL_W      0x1FU
+#define POS_CGU_DIV_CSEL    0U
+#define MASK_CGU_DIV_CSEL   (CGU_DIV_CSEL_W << POS_CGU_DIV_CSEL)
 #define CGU_DIV_SYSSEL_W    0x1FU // 5-bit SYSCLK divisor field
 #define POS_CGU_DIV_SYSSEL  8U
 #define MASK_CGU_DIV_SYSSEL (CGU_DIV_SYSSEL_W << POS_CGU_DIV_SYSSEL)
@@ -57,6 +60,7 @@ void clocks_init(const struct clocks_cfg *cfg)
    // Build expected bit patterns from the config.
    uint32_t want_msel   = (cfg->msel & CGU_CTL_MSEL_W) << POS_CGU_CTL_MSEL;
    uint32_t want_df     = (cfg->df & CGU_CTL_DF_W) << POS_CGU_CTL_DF;
+   uint32_t want_csel   = (cfg->csel & CGU_DIV_CSEL_W) << POS_CGU_DIV_CSEL;
    uint32_t want_syssel = (cfg->syssel & CGU_DIV_SYSSEL_W)
                           << POS_CGU_DIV_SYSSEL;
    uint32_t want_s0sel = (cfg->s0sel & CGU_DIV_S0SEL_W) << POS_CGU_DIV_S0SEL;
@@ -67,7 +71,8 @@ void clocks_init(const struct clocks_cfg *cfg)
 
    bool ctl_ok = ((cur_ctl & MASK_CGU_CTL_MSEL) == want_msel) &&
                  ((cur_ctl & MASK_CGU_CTL_DF) == want_df);
-   bool div_ok = ((cur_div & MASK_CGU_DIV_SYSSEL) == want_syssel) &&
+   bool div_ok = ((cur_div & MASK_CGU_DIV_CSEL) == want_csel) &&
+                 ((cur_div & MASK_CGU_DIV_SYSSEL) == want_syssel) &&
                  ((cur_div & MASK_CGU_DIV_S0SEL) == want_s0sel);
 
    if (ctl_ok && div_ok) {
@@ -85,8 +90,8 @@ void clocks_init(const struct clocks_cfg *cfg)
 
    if (!div_ok) {
       uint32_t div = cur_div;
-      div &= ~(MASK_CGU_DIV_SYSSEL | MASK_CGU_DIV_S0SEL);
-      div |= want_syssel | want_s0sel | BIT_CGU_DIV_UPDT;
+      div &= ~(MASK_CGU_DIV_CSEL | MASK_CGU_DIV_SYSSEL | MASK_CGU_DIV_S0SEL);
+      div |= want_csel | want_syssel | want_s0sel | BIT_CGU_DIV_UPDT;
       MMR(REG_CGU0_DIV) = div;
    }
 

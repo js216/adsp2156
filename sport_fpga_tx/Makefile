@@ -8,6 +8,7 @@ OBJ = \
   sport.doj \
   dma.doj \
   clocks.doj \
+  gpio.doj \
   timer.doj \
   pinmux.doj \
   uart.doj \

@@ -351,35 +351,281 @@ void sport_enable_external_pins(const enum sport_id id)
    }
 }
 
+void sport_route_sport0a_to_wired_pins(void)
+{
+   sport_route_tx_to_pins(SPORT_ID_0, 0U, 5U, 7U, 8U);
+}
+
+struct dai_pin_field {
+   uint32_t pin_reg;
+   uint32_t pin_bit;
+   uint32_t pben_reg;
+   uint32_t pben_bit;
+};
+
+static const struct dai_pin_field dai_pin_fields[2][21] = {
+    {
+        {0U, 0U, 0U, 0U},
+        {REG_DAI0_PIN0, 0U,  REG_DAI0_PBEN0, 0U },  // PB01
+        {REG_DAI0_PIN0, 7U,  REG_DAI0_PBEN0, 6U },  // PB02
+        {REG_DAI0_PIN0, 14U, REG_DAI0_PBEN0, 12U},  // PB03
+        {REG_DAI0_PIN0, 21U, REG_DAI0_PBEN0, 18U},  // PB04
+        {REG_DAI0_PIN1, 0U,  REG_DAI0_PBEN0, 24U},  // PB05
+        {REG_DAI0_PIN1, 7U,  REG_DAI0_PBEN1, 0U },  // PB06
+        {REG_DAI0_PIN1, 14U, REG_DAI0_PBEN1, 6U },  // PB07
+        {REG_DAI0_PIN1, 21U, REG_DAI0_PBEN1, 12U},  // PB08
+        {REG_DAI0_PIN2, 0U,  REG_DAI0_PBEN1, 18U},  // PB09
+        {REG_DAI0_PIN2, 7U,  REG_DAI0_PBEN1, 24U},  // PB10
+        {REG_DAI0_PIN2, 14U, REG_DAI0_PBEN2, 0U },  // PB11
+        {REG_DAI0_PIN2, 21U, REG_DAI0_PBEN2, 6U },  // PB12
+        {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U},
+        {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U},
+        {REG_DAI0_PIN4, 14U, REG_DAI0_PBEN3, 18U}, // PB19
+        {REG_DAI0_PIN4, 21U, REG_DAI0_PBEN3, 24U}, // PB20
+    },
+    {
+        {0U, 0U, 0U, 0U},
+        {REG_DAI1_PIN0, 0U,  REG_DAI1_PBEN0, 0U },
+        {REG_DAI1_PIN0, 7U,  REG_DAI1_PBEN0, 6U },
+        {REG_DAI1_PIN0, 14U, REG_DAI1_PBEN0, 12U},
+        {REG_DAI1_PIN0, 21U, REG_DAI1_PBEN0, 18U},
+        {REG_DAI1_PIN1, 0U,  REG_DAI1_PBEN0, 24U},
+        {REG_DAI1_PIN1, 7U,  REG_DAI1_PBEN1, 0U },
+        {REG_DAI1_PIN1, 14U, REG_DAI1_PBEN1, 6U },
+        {REG_DAI1_PIN1, 21U, REG_DAI1_PBEN1, 12U},
+        {REG_DAI1_PIN2, 0U,  REG_DAI1_PBEN1, 18U},
+        {REG_DAI1_PIN2, 7U,  REG_DAI1_PBEN1, 24U},
+        {REG_DAI1_PIN2, 14U, REG_DAI1_PBEN2, 0U },
+        {REG_DAI1_PIN2, 21U, REG_DAI1_PBEN2, 6U },
+        {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U},
+        {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U}, {0U, 0U, 0U, 0U},
+        {REG_DAI1_PIN4, 14U, REG_DAI1_PBEN3, 18U},
+        {REG_DAI1_PIN4, 21U, REG_DAI1_PBEN3, 24U},
+    },
+};
+
+static const struct dai_pin_field *pin_field(uint32_t dai_idx, uint32_t pin)
+{
+   assert(dai_idx < 2U);
+   assert(pin < 21U);
+   const struct dai_pin_field *f = &dai_pin_fields[dai_idx][pin];
+   assert(f->pin_reg != 0U && f->pben_reg != 0U);
+   return f;
+}
+
+static uint32_t local_sport_num(enum sport_id id, uint32_t dai_idx)
+{
+   uint32_t n = (uint32_t)id;
+   assert(dai_idx < 2U);
+   assert((dai_idx == 0U && n < 4U) || (dai_idx == 1U && n >= 4U && n < 8U));
+   return (dai_idx == 0U) ? n : (n - 4U);
+}
+
+void sport_route_clk_copy(const enum sport_id id, uint32_t dai_idx,
+                          uint32_t pin)
+{
+   uint32_t n = local_sport_num(id, dai_idx);
+   assert(n < 3U);
+   enable_dai_pads(dai_idx);
+   const struct dai_pin_field *p = pin_field(dai_idx, pin);
+   sru_set_field(p->pin_reg, (struct reg_field){p->pin_bit, BITS_DAI_PIN_FIELD_M},
+                 0x20U + 2U * n);
+   sru_set_field(p->pben_reg, (struct reg_field){p->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 0x08U + 8U * n);
+}
+
+void sport_route_tx_to_pins(const enum sport_id id, uint32_t dai_idx,
+                            uint32_t ad0_pin, uint32_t aclk_pin,
+                            uint32_t afs_pin)
+{
+   uint32_t n = local_sport_num(id, dai_idx);
+   assert(n < 3U); // SPORT3/7 ACLK/AFS use separate source-code slots.
+   enable_dai_pads(dai_idx);
+
+   const struct dai_pin_field *ad0 = pin_field(dai_idx, ad0_pin);
+   const struct dai_pin_field *clk = pin_field(dai_idx, aclk_pin);
+   const struct dai_pin_field *fs  = pin_field(dai_idx, afs_pin);
+   uint32_t ad0_src  = 0x14U + 4U * n;
+   uint32_t clk_src  = 0x20U + 2U * n;
+   uint32_t fs_src   = 0x26U + 2U * n;
+   uint32_t ad0_pben = 0x0AU + 8U * n;
+   uint32_t clk_pben = 0x08U + 8U * n;
+   uint32_t fs_pben  = 0x09U + 8U * n;
+
+   sru_set_field(ad0->pin_reg, (struct reg_field){ad0->pin_bit, BITS_DAI_PIN_FIELD_M}, ad0_src);
+   sru_set_field(clk->pin_reg, (struct reg_field){clk->pin_bit, BITS_DAI_PIN_FIELD_M}, clk_src);
+   sru_set_field(fs->pin_reg,  (struct reg_field){fs->pin_bit,  BITS_DAI_PIN_FIELD_M}, fs_src);
+   sru_set_field(ad0->pben_reg, (struct reg_field){ad0->pben_bit, BITS_DAI_PBEN_FIELD_M}, ad0_pben);
+   sru_set_field(clk->pben_reg, (struct reg_field){clk->pben_bit, BITS_DAI_PBEN_FIELD_M}, clk_pben);
+   sru_set_field(fs->pben_reg,  (struct reg_field){fs->pben_bit,  BITS_DAI_PBEN_FIELD_M}, fs_pben);
+}
+
+void sport_route_rx_from_pins(const enum sport_id id, uint32_t dai_idx,
+                              uint32_t ad0_pin, uint32_t aclk_pin,
+                              uint32_t afs_pin)
+{
+   uint32_t n = local_sport_num(id, dai_idx);
+   assert(n < 3U);
+   enable_dai_pads(dai_idx);
+
+   const struct dai_pin_field *ad0 = pin_field(dai_idx, ad0_pin);
+   const struct dai_pin_field *clk = pin_field(dai_idx, aclk_pin);
+   const struct dai_pin_field *fs  = pin_field(dai_idx, afs_pin);
+   sru_set_field(ad0->pben_reg, (struct reg_field){ad0->pben_bit, BITS_DAI_PBEN_FIELD_M}, SRU_F_LOW);
+   sru_set_field(clk->pben_reg, (struct reg_field){clk->pben_bit, BITS_DAI_PBEN_FIELD_M}, SRU_F_LOW);
+   sru_set_field(fs->pben_reg,  (struct reg_field){fs->pben_bit,  BITS_DAI_PBEN_FIELD_M}, SRU_F_LOW);
+
+   uint32_t clk0 = (dai_idx == 0U) ? REG_DAI0_CLK0 : REG_DAI1_CLK0;
+   uint32_t fs0  = (dai_idx == 0U) ? REG_DAI0_FS0  : REG_DAI1_FS0;
+   uint32_t dat0 = (dai_idx == 0U) ? REG_DAI0_DAT0 : REG_DAI1_DAT0;
+   uint32_t dat1 = (dai_idx == 0U) ? REG_DAI0_DAT1 : REG_DAI1_DAT1;
+   sru_set_field(clk0, (struct reg_field){5U + (10U * n), BITS_DAI_CLK_FIELD_M}, aclk_pin - 1U);
+   sru_set_field(fs0,  (struct reg_field){5U + (10U * n), BITS_DAI_FS_FIELD_M},  afs_pin - 1U);
+   if (n == 0U) {
+      sru_set_field(dat0, (struct reg_field){12U, BITS_DAI_DAT_FIELD_M}, ad0_pin - 1U);
+   } else if (n == 1U) {
+      sru_set_field(dat1, (struct reg_field){6U, BITS_DAI_DAT_FIELD_M}, ad0_pin - 1U);
+   } else {
+      sru_set_field(dat1, (struct reg_field){18U, BITS_DAI_DAT_FIELD_M}, ad0_pin - 1U);
+   }
+}
+
+void sport_route_rx_master_to_pins(const enum sport_id id, uint32_t dai_idx,
+                                   uint32_t ad0_pin, uint32_t bclk_pin,
+                                   uint32_t bfs_pin)
+{
+   uint32_t n = local_sport_num(id, dai_idx);
+   assert(n < 3U);
+   enable_dai_pads(dai_idx);
+
+   const struct dai_pin_field *ad0 = pin_field(dai_idx, ad0_pin);
+   const struct dai_pin_field *clk = pin_field(dai_idx, bclk_pin);
+   const struct dai_pin_field *fs  = pin_field(dai_idx, bfs_pin);
+
+   // Data remains an FPGA-driven DAI input into SPORT BD0.
+   sru_set_field(ad0->pben_reg,
+                 (struct reg_field){ad0->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW);
+   uint32_t dat0 = (dai_idx == 0U) ? REG_DAI0_DAT0 : REG_DAI1_DAT0;
+   uint32_t dat1 = (dai_idx == 0U) ? REG_DAI0_DAT1 : REG_DAI1_DAT1;
+   if (n == 0U) {
+      sru_set_field(dat0, (struct reg_field){12U, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   } else if (n == 1U) {
+      sru_set_field(dat1, (struct reg_field){6U, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   } else {
+      sru_set_field(dat1, (struct reg_field){18U, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   }
+
+   // Half-B clock/frame-sync outputs: group-D source codes 0x21/0x27 for
+   // SPORT0/4, then +2 per local SPORT; group-F PBEN codes 0x0c/0x0d,
+   // then +8 per local SPORT.
+   uint32_t clk_src  = 0x21U + 2U * n;
+   uint32_t fs_src   = 0x27U + 2U * n;
+   uint32_t clk_pben = 0x0CU + 8U * n;
+   uint32_t fs_pben  = 0x0DU + 8U * n;
+
+   sru_set_field(clk->pin_reg,
+                 (struct reg_field){clk->pin_bit, BITS_DAI_PIN_FIELD_M},
+                 clk_src);
+   sru_set_field(fs->pin_reg,
+                 (struct reg_field){fs->pin_bit, BITS_DAI_PIN_FIELD_M},
+                 fs_src);
+   sru_set_field(clk->pben_reg,
+                 (struct reg_field){clk->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 clk_pben);
+   sru_set_field(fs->pben_reg,
+                 (struct reg_field){fs->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 fs_pben);
+
+   // HRM 23 "SRU SPORT Receive Controller": a SPORT receiving as the
+   // clock/frame-sync master must feed its output clock back to its input
+   // clock to trigger the receive state machine. Feed CLK/FS back from the
+   // PIN readback (not the internal output) so the receiver samples with
+   // the same edge the FPGA transmitter launched against -- pad and wire
+   // delay then appear identically in data and sampling clock.
+   uint32_t clk0 = (dai_idx == 0U) ? REG_DAI0_CLK0 : REG_DAI1_CLK0;
+   uint32_t fs0  = (dai_idx == 0U) ? REG_DAI0_FS0  : REG_DAI1_FS0;
+   sru_set_field(clk0, (struct reg_field){5U + (10U * n), BITS_DAI_CLK_FIELD_M},
+                 bclk_pin - 1U);
+   sru_set_field(fs0,  (struct reg_field){5U + (10U * n), BITS_DAI_FS_FIELD_M},
+                 bfs_pin - 1U);
+}
+
+void sport_route_rx_master_a_to_pins(const enum sport_id id, uint32_t dai_idx,
+                                     uint32_t ad0_pin, uint32_t aclk_pin,
+                                     uint32_t afs_pin)
+{
+   uint32_t n = local_sport_num(id, dai_idx);
+   assert(n < 3U);
+   enable_dai_pads(dai_idx);
+
+   const struct dai_pin_field *ad0 = pin_field(dai_idx, ad0_pin);
+   const struct dai_pin_field *clk = pin_field(dai_idx, aclk_pin);
+   const struct dai_pin_field *fs  = pin_field(dai_idx, afs_pin);
+
+   // AD0 remains an FPGA-driven DAI input into SPORT AD0.
+   sru_set_field(ad0->pben_reg,
+                 (struct reg_field){ad0->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 SRU_F_LOW);
+   uint32_t dat0 = (dai_idx == 0U) ? REG_DAI0_DAT0 : REG_DAI1_DAT0;
+   uint32_t dat1 = (dai_idx == 0U) ? REG_DAI0_DAT1 : REG_DAI1_DAT1;
+   uint32_t dat2 = (dai_idx == 0U) ? REG_DAI0_DAT2 : REG_DAI1_DAT2;
+   uint32_t dat6 = (dai_idx == 0U) ? REG_DAI0_DAT6 : REG_DAI1_DAT6;
+#ifndef SPORT4A_DAT_BIT
+#define SPORT4A_DAT_BIT 12U
+#endif
+#ifndef SPORT4A_DAT_REG
+#define SPORT4A_DAT_REG 0U
+#endif
+   if (n == 0U) {
+      uint32_t reg = dat0;
+      if (SPORT4A_DAT_REG == 1U) {
+         reg = dat1;
+      } else if (SPORT4A_DAT_REG == 2U) {
+         reg = dat2;
+      } else if (SPORT4A_DAT_REG == 6U) {
+         reg = dat6;
+      }
+      sru_set_field(reg, (struct reg_field){SPORT4A_DAT_BIT, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   } else if (n == 1U) {
+      sru_set_field(dat1, (struct reg_field){6U, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   } else {
+      sru_set_field(dat1, (struct reg_field){18U, BITS_DAI_DAT_FIELD_M},
+                    ad0_pin - 1U);
+   }
+
+   // Half-A clock/frame-sync outputs use the same group-D source and PBEN
+   // codes as sport_route_tx_to_pins(), but leave AD0 as input above.
+   uint32_t clk_src  = 0x20U + 2U * n;
+   uint32_t fs_src   = 0x26U + 2U * n;
+   uint32_t clk_pben = 0x08U + 8U * n;
+   uint32_t fs_pben  = 0x09U + 8U * n;
+
+   sru_set_field(clk->pin_reg,
+                 (struct reg_field){clk->pin_bit, BITS_DAI_PIN_FIELD_M},
+                 clk_src);
+   sru_set_field(fs->pin_reg,
+                 (struct reg_field){fs->pin_bit, BITS_DAI_PIN_FIELD_M},
+                 fs_src);
+   sru_set_field(clk->pben_reg,
+                 (struct reg_field){clk->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 clk_pben);
+   sru_set_field(fs->pben_reg,
+                 (struct reg_field){fs->pben_bit, BITS_DAI_PBEN_FIELD_M},
+                 fs_pben);
+}
+
 void sport_install_external_loopback(const enum sport_id id)
 {
-   // SPORTn half-A drives PBxx; half-B receives from PB05/PB07/PB08
-   // (matching pair). Group-A code 0x06 = PB07_O, group-C code
-   // 0x07 = PB08_O, group-B code 0x04 = PB05_O -- the same SRU source
-   // codes and field positions apply on either DAI block, so SPORT0
-   // (DAI0) is an exact mirror of SPORT4 (DAI1). Force the return
-   // pins to inputs so an FPGA or jumper is the only possible source.
-   uint32_t pben0, pben1, clk0, fs0, dat0;
-   if (id == SPORT_ID_4) {
-      pben0 = REG_DAI1_PBEN0; pben1 = REG_DAI1_PBEN1;
-      clk0  = REG_DAI1_CLK0;  fs0   = REG_DAI1_FS0;  dat0 = REG_DAI1_DAT0;
-   } else if (id == SPORT_ID_0) {
-      pben0 = REG_DAI0_PBEN0; pben1 = REG_DAI0_PBEN1;
-      clk0  = REG_DAI0_CLK0;  fs0   = REG_DAI0_FS0;  dat0 = REG_DAI0_DAT0;
-   } else {
-      assert(0); // only SPORT0 (DAI0) and SPORT4 (DAI1) tabulated
-      return;
-   }
-   sru_set_field(pben0, (struct reg_field){24U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // PB05 input
-   sru_set_field(pben1, (struct reg_field){6U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // PB07 input
-   sru_set_field(pben1, (struct reg_field){12U, BITS_DAI_PBEN_FIELD_M},
-                 SRU_F_LOW); // PB08 input
-   sru_set_field(clk0, (struct reg_field){5U, BITS_DAI_CLK_FIELD_M},
-                 0x06U); // SPORTnB ACLK <- PB07_O
-   sru_set_field(fs0, (struct reg_field){5U, BITS_DAI_FS_FIELD_M},
-                 0x07U); // SPORTnB AFS <- PB08_O
-   sru_set_field(dat0, (struct reg_field){12U, BITS_DAI_DAT_FIELD_M},
-                 0x04U); // SPORTnB data <- PB05_O
+   if (id == SPORT_ID_4)
+      sport_route_rx_from_pins(id, 1U, 5U, 7U, 8U);
+   else if (id == SPORT_ID_0)
+      sport_route_rx_from_pins(id, 0U, 5U, 7U, 8U);
+   else
+      assert(0);
 }

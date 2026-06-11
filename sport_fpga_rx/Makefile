@@ -6,6 +6,8 @@ OBJ = \
   main.doj \
   assert.doj \
   sport.doj \
+  gpio.doj \
+  dma.doj \
   clocks.doj \
   timer.doj \
   pinmux.doj \

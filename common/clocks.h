@@ -78,6 +78,42 @@ struct clocks_cfg {
        .osel     = 40U,                                                        \
    }
 
+// SCLK0 = 60 MHz configuration for SPORT TX margin testing while meeting
+// a 60 Mbps/lane requirement with CLKDIV=0:
+//   CLKIN = 25 MHz, MSEL = 72, DF = 0
+//   PLLCLK = 1800 MHz, CCLK = 600 MHz, SYSCLK = 360 MHz,
+//   SCLK0 = 60 MHz, and 360/60 = 6.
+#define CLOCKS_CFG_SCLK0_60MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 72U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 3U,                                                         \
+       .syssel   = 5U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
+// SCLK0 = 60.833333 MHz configuration, the smallest integer-MSEL step above
+// 60 MHz that preserves SYSCLK/SCLK0 = 6 for SPORT CLKDIV=0:
+//   CLKIN = 25 MHz, MSEL = 73, DF = 0
+//   PLLCLK = 1825 MHz, CCLK = 608.333 MHz, SYSCLK = 365 MHz,
+//   SCLK0 = 60.833333 MHz.
+#define CLOCKS_CFG_SCLK0_60833333HZ                                            \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 73U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 3U,                                                         \
+       .syssel   = 5U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
 // Program CGU0 to the given configuration and wait for PLL
 // lock. The caller is responsible for ensuring BOARD_SCLK_HZ
 // matches the SCLK0 that `cfg` produces; the function does
