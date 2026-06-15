@@ -38,7 +38,13 @@
 #define TX_HALF 4096U
 #endif
 #define PRBS31_SEED 0x7FFFFFFFU
-#define SCLK_HZ 59375000ULL
+#ifndef SPORT_SCLK_HZ
+#define SPORT_SCLK_HZ 59375000U
+#endif
+#ifndef SPORT_CLKDIV
+#define SPORT_CLKDIV 0U
+#endif
+#define SCLK_HZ ((uint64_t)SPORT_SCLK_HZ)
 #define LOCAL_BAUD_DIV ((uint32_t)((SCLK_HZ + (BOARD_BAUD / 2ULL)) / BOARD_BAUD))
 #define START_TIMEOUT 1000U
 #define START_WAIT_LOOPS 2000000U
@@ -81,6 +87,41 @@ static void put_u32(uint32_t v)
       while (v >= p10[i]) { v -= p10[i]; c++; }
       if (c != '0') st = 1U;
       if (st) uart_putc(c);
+   }
+}
+
+// Heartbeat print queue: the streaming service loop must NEVER block on
+// the UART (a single blocked ~1.3 ms put_str starves the TX half refill
+// and transmits a stale half -- the deterministic FF-DD "corruption" of
+// 2026-06-12). Heartbeats are formatted into this ring and drained one
+// character per loop pass, only when the UART holding register is free.
+static char     hbq[128];
+static uint32_t hbq_head, hbq_tail;
+static void hbq_putc(char c)
+{
+   uint32_t n = (hbq_head + 1U) & 127U;
+   if (n != hbq_tail) { hbq[hbq_head] = c; hbq_head = n; }
+}
+static void hbq_str(const char *s) { while (*s) hbq_putc(*s++); }
+static void hbq_u32(uint32_t v)
+{
+   static const uint32_t p10[10] = {1000000000U,100000000U,10000000U,1000000U,
+       100000U,10000U,1000U,100U,10U,1U};
+   if (!v) { hbq_putc('0'); return; }
+   unsigned st = 0U;
+   for (unsigned i = 0U; i < 10U; i++) {
+      char c = '0';
+      while (v >= p10[i]) { v -= p10[i]; c++; }
+      if (c != '0') st = 1U;
+      if (st) hbq_putc(c);
+   }
+}
+static inline void hbq_drain(void)
+{
+   if (hbq_tail != hbq_head &&
+       (MMR(REG_UART0_STAT) & BIT_UART_STAT_THRE) != 0U) {
+      MMR(REG_UART0_THR) = (uint32_t)(uint8_t)hbq[hbq_tail];
+      hbq_tail = (hbq_tail + 1U) & 127U;
    }
 }
 
@@ -207,19 +248,30 @@ static uint32_t tx_which_half(enum dma_channel ch, uint32_t c)
 }
 
 static struct sport_dsp_cfg rx_cfg = {
-    .word_bits = 32, .clkdiv = 0, .fsdiv = 0, .is_tx = false,
+    .word_bits = 32, .clkdiv = SPORT_CLKDIV, .fsdiv = 0, .is_tx = false,
     .internal_clk = false, .internal_fs = false, .late_fs = true,
     .data_indep_fs = false, .sample_rising = true,
 };
 static struct sport_dsp_cfg tx_cfg = {
-    .word_bits = 32, .clkdiv = 0, .fsdiv = 31, .is_tx = true,
+    .word_bits = 32, .clkdiv = SPORT_CLKDIV, .fsdiv = 31, .is_tx = true,
     .internal_clk = true, .internal_fs = true, .late_fs = true,
     .data_indep_fs = false, .sample_rising = (TX_CKRE != 0),
 };
 
 int main(void)
 {
-   static const struct clocks_cfg clk = CLOCKS_CFG_SCLK0_59MHZ;
+   static const struct clocks_cfg clk =
+#if SPORT_SCLK_HZ == 60000000U
+      CLOCKS_CFG_SCLK0_60MHZ;
+#elif SPORT_SCLK_HZ == 75000000U
+      CLOCKS_CFG_SCLK0_75MHZ;
+#elif SPORT_SCLK_HZ == 45000000U
+      CLOCKS_CFG_SCLK0_45MHZ;
+#elif SPORT_SCLK_HZ == 52083333U
+      CLOCKS_CFG_SCLK0_52083333HZ;
+#else
+      CLOCKS_CFG_SCLK0_59MHZ;
+#endif
    clocks_init(&clk);
    uart_init(LOCAL_BAUD_DIV);
    while ((MMR(REG_UART0_STAT) & BIT_UART_STAT_THRE) == 0U) {}
@@ -240,7 +292,11 @@ int main(void)
    // the first F->D word the FPGA emits (PRBS word 0) lands at rx_buf[*][0][0]
    // and lines up with the RX LFSR's seed -- that is the entire "sync". ----
 #ifdef LANE1_SOLO
-   sport_route_rx_from_pins(SPORT_ID_1, 0U, 10U, 12U, 20U);
+   sport_route_rx_from_pins(SPORT_ID_1, 0U, 10U, 12U,
+                            RX_N >= 3U ? 20U : 2U); // 2x2: FS on DAI0_02
+   // (T8) so T10 stays silent next to the live T11 capture clock; 4-lane:
+   // the proven shared-FS pin DAI0_20 (T10) -- capture is silenced there,
+   // so T10 aggression is harmless and the pcf pairs both DAI0 SPORTs on it.
 #else
    sport_route_rx_from_pins(SPORT_ID_5, 1U, 9U, 10U, 11U);
 #endif
@@ -251,7 +307,11 @@ int main(void)
    sport_route_rx_from_pins(SPORT_ID_0, 0U, 19U, 12U, 20U);
 #endif
    if (RX_N > 1U)
-      sport_route_rx_from_pins(SPORT_ID_1, 0U, 10U, 12U, 20U);
+      sport_route_rx_from_pins(SPORT_ID_1, 0U, 10U, 12U,
+                            RX_N >= 3U ? 20U : 2U); // 2x2: FS on DAI0_02
+   // (T8) so T10 stays silent next to the live T11 capture clock; 4-lane:
+   // the proven shared-FS pin DAI0_20 (T10) -- capture is silenced there,
+   // so T10 aggression is harmless and the pcf pairs both DAI0 SPORTs on it.
    for (uint32_t c = 0U; c < RX_N; c++) {
       sport_dsp_serial_init(RX_ID[c], SPORT_HALF_B, &rx_cfg);
       sport_clear_errors(RX_ID[c], SPORT_HALF_B);
@@ -274,11 +334,20 @@ int main(void)
    uint32_t tx_done_halves[2] = {0U, 0U};
    const uint32_t tx_halves_target = (TOTAL_WORDS + TX_HALF - 1U) / TX_HALF + 2U;
    sport_route_tx_to_pins(SPORT_ID_4, 1U, 5U, 7U, 8U);
-   // Second copy of the SPT4A clock on DAI1_PIN04 (FPGA ball P10): the
-   // FPGA taps this copy for its to_dsp forwarder so the from_dsp
-   // capture clock keeps a single light load (proven topology).
+   // The FPGA forwards the primary clocks, so the SPT4A copy on DAI1_04
+   // (FPGA ball P10) is logically unused -- but it stays DRIVEN: P10 is
+   // adjacent to R10 (the RUN input), and leaving the wire floating let
+   // coupled noise dip RUN and reset both FPGA engines at once (the
+   // bilateral 100%-error 4GiB failures of 2026-06-12, onset moving
+   // run-to-run). Every historical pass had this wire driven; it acts
+   // as a shield. The SPT0A copy on DAI0_02 is gone for good: that pin
+   // is now the INPUT carrying lane1's frame sync from FPGA ball T8
+   // (moved off T10, whose edges coupled into the adjacent T11 primary
+   // clock input -- the 15-error lane0 trickle).
    sport_route_clk_copy(SPORT_ID_4, 1U, 4U);
-#if TX_N >= 2U || RX_N >= 3U
+#if RX_N >= 3U
+   // 4-lane only: second copy (SPT0A clock on DAI0_02 -> FPGA T8) for
+   // the pair1 forwarders. In 2x2 this pin is the SPORT1B FS input.
    sport_route_clk_copy(SPORT_ID_0, 0U, 2U);
 #endif
    if (TX_N > 1U)
@@ -304,7 +373,14 @@ int main(void)
    const uint32_t rx_halves_target = TOTAL_WORDS / RX_HALF;
    uint32_t rx_half = 0U;
    uint32_t last_tick = timer_ticks();
-   const uint64_t tick_limit = SCLK_HZ * 360ULL;
+   // Streaming TOTAL_WORDS takes TOTAL_WORDS*32 ticks (one bit per SCLK
+   // tick), so scale the watchdog with the workload plus 120 s grace.
+   // A fixed 360 s limit was shorter than the 4 GiB stream (579 s) and
+   // fired mid-run; the teardown then chopped the FPGA's in-flight word
+   // and masqueraded as data corruption at exactly t=360 s.
+   const uint64_t tick_limit = (uint64_t)TOTAL_WORDS * 32ULL
+                               * (SPORT_CLKDIV + 1ULL)
+                               + SCLK_HZ * 120ULL;
    bool rx_done = (RX_N == 0U);
    bool tx_done = (TX_N == 0U);
 
@@ -312,6 +388,7 @@ int main(void)
    // same amount concurrently (same clock), so the FPGA from_dsp has ~TOTAL_WORDS
    // too. Keep refilling TX while the loop runs.
    while (!rx_done && timeouts == 0U && tx_timeouts == 0U) {
+      hbq_drain();
       // --- service RX (RX_DMA[0] is the timing reference) ---
       if (!rx_done && dma_wrap_check(RX_DMA[0])) {
          uint32_t completed = rx_half & 1U;
@@ -324,9 +401,11 @@ int main(void)
             // ~1 Hz receive heartbeat with running error count, so a
             // failing stream is visible (and localizable) live.
             if ((rx_half & (RX_PROG_HALVES - 1U)) == 0U) {
-               put_str("rx h="); put_u32(rx_half);
-               put_str(" e="); put_u32(errors[0] + errors[1] + (RX_N > 2U ? errors[2] + errors[3] : 0U));
-               put_str("\r\n");
+#ifndef QUIET_HB
+               hbq_str("rx h="); hbq_u32(rx_half);
+               hbq_str(" e="); hbq_u32(errors[0] + errors[1] + (RX_N > 2U ? errors[2] + errors[3] : 0U));
+               hbq_str("\r\n");
+#endif
             }
             if (rx_half >= rx_halves_target) rx_done = true;
          }
@@ -367,6 +446,8 @@ int main(void)
       if (elapsed >= tick_limit) timeouts++;
    }
 
+   while (hbq_tail != hbq_head) hbq_drain();
+
    // Trailing clock: the FPGA registers inputs in IO cells, so the last
    // word needs extra clock edges to flush through and latch done.
    delay_us(10000U);
@@ -393,7 +474,7 @@ int main(void)
    put_str(" tx_lanes="); put_u32(TX_N);
    put_str(" rx_words="); put_u32(got_words);
    put_str(" rx_errors="); put_u32(total_err);
-#if RX_N >= 3U
+#if RX_N >= 3U || defined(LANE_ERR)
    put_str(" e0="); put_u32(errors[0]);
    put_str(" e1="); put_u32(errors[1]);
    put_str(" e2="); put_u32(errors[2]);

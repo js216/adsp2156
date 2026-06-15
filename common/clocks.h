@@ -134,6 +134,50 @@ struct clocks_cfg {
        .osel     = 40U,                                                        \
    }
 
+// Frequency-ladder step configs (jk's 30->59.375 MHz shakeout,
+// 2026-06-12). All verified against datasheet Tables 19/20:
+// PLLCLK in [1.2, 2.0] GHz, SYSCLK in [200, 500] MHz,
+// SYSCLK = 6 x SCLK0, SCLK1 = SYSCLK/2 <= 250 MHz, DCLK in [300, 667].
+// SCLK0 = 75 MHz (bit clock 37.5 MHz with SPORT CLKDIV=1):
+//   PLL = 1800, SYSCLK = 450, CCLK = 900.
+#define CLOCKS_CFG_SCLK0_75MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U, .msel = 72U, .df = 0U, .csel = 2U,               \
+       .syssel = 4U, .s0sel = 6U, .s1sel = 2U, .dsel = 3U, .osel = 40U,        \
+   }
+// SCLK0 = 45 MHz (bit clock 45 MHz, CLKDIV=0):
+//   PLL = 1350, SYSCLK = 270, CCLK = 450.
+#define CLOCKS_CFG_SCLK0_45MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U, .msel = 54U, .df = 0U, .csel = 3U,               \
+       .syssel = 5U, .s0sel = 6U, .s1sel = 2U, .dsel = 3U, .osel = 40U,        \
+   }
+// SCLK0 = 90 MHz (bit clock 45 MHz with SPORT CLKDIV=1) -- discriminator
+// config for the 45 Mbps slip investigation, all Table 19 conditions met:
+//   PLL = 1800, CCLK = 900, SYSCLK = 360 (= 4 x SCLK0), SCLK0 = 90.
+#define CLOCKS_CFG_SCLK0_90MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U, .msel = 72U, .df = 0U, .csel = 2U,               \
+       .syssel = 5U, .s0sel = 4U, .s1sel = 2U, .dsel = 3U, .osel = 40U,        \
+   }
+
+// SCLK0 = 112.5 MHz (bit clock 56.25 MHz with SPORT CLKDIV=1) --
+// divider-vs-rate discriminator: PLL = 1800, CCLK = 600,
+// SYSCLK = 450 (= 4 x SCLK0), SCLK1 = 225, all within Table 19.
+#define CLOCKS_CFG_SCLK0_112MHZ                                                \
+   {                                                                           \
+       .clkin_hz = 25000000U, .msel = 72U, .df = 0U, .csel = 3U,               \
+       .syssel = 4U, .s0sel = 4U, .s1sel = 2U, .dsel = 3U, .osel = 40U,        \
+   }
+
+// SCLK0 = 52.083 MHz (bit clock 52.083 MHz, CLKDIV=0):
+//   PLL = 1250, SYSCLK = 312.5, CCLK = 625.
+#define CLOCKS_CFG_SCLK0_52083333HZ                                            \
+   {                                                                           \
+       .clkin_hz = 25000000U, .msel = 50U, .df = 0U, .csel = 2U,               \
+       .syssel = 4U, .s0sel = 6U, .s1sel = 2U, .dsel = 3U, .osel = 40U,        \
+   }
+
 // Program CGU0 to the given configuration and wait for PLL
 // lock. The caller is responsible for ensuring BOARD_SCLK_HZ
 // matches the SCLK0 that `cfg` produces; the function does
