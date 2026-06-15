@@ -77,22 +77,6 @@ struct dma_buf {
 void dma_autobuffer_config(const enum dma_channel ch, const struct dma_buf buf,
                            const enum dma_dir dir);
 
-// Configure a channel for a single-shot 32-bit transfer of
-// buf.word_count words (FLOW = STOP). The channel disables
-// itself after the last transfer; poll dma_done() to wait.
-//
-// ch  : which DMA channel.
-// buf : flat memory region (not circular).
-// dir : TX_FROM_MEM or RX_TO_MEM.
-void dma_oneshot_config(const enum dma_channel ch, const struct dma_buf buf,
-                        const enum dma_dir dir);
-
-// Return true once XCNT_CUR has reached zero -- i.e. the
-// one-shot transfer has drained. Meaningful only after a
-// dma_oneshot_config + dma_enable pair.
-//   ch: which DMA channel.
-bool dma_done(const enum dma_channel ch);
-
 // Set CFG.EN to start the channel.
 //   ch: which DMA channel.
 void dma_enable(const enum dma_channel ch);

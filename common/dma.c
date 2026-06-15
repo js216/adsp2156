@@ -159,34 +159,6 @@ uint32_t dma_xcnt_cur(const enum dma_channel ch)
    return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR);
 }
 
-void dma_oneshot_config(const enum dma_channel ch, const struct dma_buf buf,
-                        const enum dma_dir dir)
-{
-   uint32_t base = dma_base(ch);
-
-   MMR(base + OFF_DMA_CFG) = 0U;
-
-   MMR(base + OFF_DMA_ADDRSTART)  = to_dma_addr(buf.base);
-   MMR(base + OFF_DMA_XCNT)       = buf.word_count;
-   MMR(base + OFF_DMA_XMOD)       = 4U;
-   MMR(base + OFF_DMA_YCNT)       = 0U;
-   MMR(base + OFF_DMA_YMOD)       = 0U;
-   MMR(base + OFF_DMA_DSCPTR_NXT) = 0U;
-
-   uint32_t cfg = (DMA_FLOW_STOP << POS_DMA_CFG_FLOW) |
-                  (DMA_MSIZE_4B << POS_DMA_CFG_MSIZE) |
-                  (DMA_PSIZE_4B << POS_DMA_CFG_PSIZE);
-   if (dir == DMA_DIR_RX_TO_MEM) {
-      cfg |= BIT_DMA_CFG_WNR;
-   }
-   MMR(base + OFF_DMA_CFG) = cfg;
-}
-
-bool dma_done(const enum dma_channel ch)
-{
-   return MMR(dma_base(ch) + OFF_DMA_XCNT_CUR) == 0U;
-}
-
 void dma_pingpong_rx_config(const enum dma_channel ch, const void *buf_a,
                             const void *buf_b, uint32_t half_words,
                             struct dma_dscl desc[2])

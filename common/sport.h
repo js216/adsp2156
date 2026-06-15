@@ -182,13 +182,4 @@ void sport_route_rx_master_a_to_pins(const enum sport_id id, uint32_t dai_idx,
                                      uint32_t ad0_pin, uint32_t aclk_pin,
                                      uint32_t afs_pin);
 
-// Route the half-A pin-buffer INPUTS back into half-B's clock,
-// frame-sync and data inputs through the DAI SRU. Required when
-// using a true off-chip jumper loopback (or an FPGA pass-through)
-// so that half-B can see what half-A is transmitting on the pins.
-// Defined for SPORT4 only (others would need separate tables).
-//
-//   id: SPORT_ID_4 only; asserts otherwise.
-void sport_install_external_loopback(const enum sport_id id);
-
 #endif // SPORT_H

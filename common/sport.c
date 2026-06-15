@@ -619,13 +619,3 @@ void sport_route_rx_master_a_to_pins(const enum sport_id id, uint32_t dai_idx,
                  (struct reg_field){fs->pben_bit, BITS_DAI_PBEN_FIELD_M},
                  fs_pben);
 }
-
-void sport_install_external_loopback(const enum sport_id id)
-{
-   if (id == SPORT_ID_4)
-      sport_route_rx_from_pins(id, 1U, 5U, 7U, 8U);
-   else if (id == SPORT_ID_0)
-      sport_route_rx_from_pins(id, 0U, 5U, 7U, 8U);
-   else
-      assert(0);
-}
