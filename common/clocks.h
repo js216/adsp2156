@@ -134,6 +134,40 @@ struct clocks_cfg {
        .osel     = 40U,                                                        \
    }
 
+// SCLK0 = 56.25 MHz: exactly 90%% of the 62.5 MHz datasheet cap (the "56+
+// Mbps" mission criterion). Same divisors as 59MHZ, only MSEL changes
+// (SCLK0 = 25 MHz * MSEL / 24): MSEL=54 -> 56.25 MHz.
+//   PLLCLK = 1350 MHz (in 1.20..2.00 GHz), SYSCLK = 337.5 MHz (= PLL/4),
+//   CCLK = 675 MHz, SCLK0 = 56.25 MHz (= SYSCLK/6). Table 19/20 OK.
+#define CLOCKS_CFG_SCLK0_56MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 54U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 2U,                                                         \
+       .syssel   = 4U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
+// SCLK0 = 57.2917 MHz (MSEL=55): one step above 56.25, so the all-in
+// wall-clock rate clears the 56.25 Mbps gate with margin. SCLK0 = 25*55/24.
+//   PLLCLK = 1375 MHz, SYSCLK = 343.75 MHz (= PLL/4), CCLK = 687.5 MHz.
+#define CLOCKS_CFG_SCLK0_57MHZ                                                 \
+   {                                                                           \
+       .clkin_hz = 25000000U,                                                  \
+       .msel     = 55U,                                                        \
+       .df       = 0U,                                                         \
+       .csel     = 2U,                                                         \
+       .syssel   = 4U,                                                         \
+       .s0sel    = 6U,                                                         \
+       .s1sel    = 2U,                                                         \
+       .dsel     = 3U,                                                         \
+       .osel     = 40U,                                                        \
+   }
+
 // Frequency-ladder step configs (jk's 30->59.375 MHz shakeout,
 // 2026-06-12). All verified against datasheet Tables 19/20:
 // PLLCLK in [1.2, 2.0] GHz, SYSCLK in [200, 500] MHz,
